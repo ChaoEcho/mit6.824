@@ -83,17 +83,44 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-// main/mrcoordinator.go calls Done() periodically to find out
-// if the entire job has finished.
-func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-	return ret
+type DoneArgs struct {
+	Task Task
 }
 
-func (c *Coordinator) AssignTask() Task {
+type DoneReply struct {
+}
+
+// worker调用Done来标记任务完成，Coordianator则将任务添加到已完成任务列表中
+func (c *Coordinator) Done(args *DoneArgs, reply *DoneReply) error {
+	// 遍历正在执行任务列表，找到对应任务，然后移除
+	for i, task := range c.RunningTaskList {
+		if task.TaskId == args.Task.TaskId {
+			c.RunningTaskList = append(c.RunningTaskList[:i], c.RunningTaskList[i+1:]...)
+			break
+		}
+	}
+	// 将任务添加到已完成任务列表中
+	c.CompletedTaskList = append(c.CompletedTaskList, args.Task)
+
+	// 如果当前阶段是Map阶段，并且所有任务都已完成，则切换到Reduce阶段
+	if c.CoordinatorStatus == CoordinatorMapStatus && len(c.RunningTaskList) == 0 {
+		c.CoordinatorStatus = CoordinatorReduceStatus
+	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.RunningTaskList) == 0 {
+		c.CoordinatorStatus = CoordinatorDoneStatus
+	}
+
+	return nil
+}
+
+// 分配任务
+type AssignTaskArgs struct {
+}
+
+type AssignTaskReply struct {
+	Task Task
+}
+
+func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) error {
 	var task Task
 	if c.CoordinatorStatus == CoordinatorMapStatus {
 		// 从未开始任务列表中取一个任务
@@ -114,7 +141,16 @@ func (c *Coordinator) AssignTask() Task {
 		// 如果所有任务都已完成，则返回一个空的任务
 		task = Task{}
 	}
-	return task
+	reply.Task = task
+	return nil
+}
+
+// 全局任务id
+var taskId int = 0
+
+func generateTaskId() int {
+	taskId++
+	return taskId
 }
 
 // create a Coordinator.
@@ -129,7 +165,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.UnstartedTaskList[i] = Task{
 			TaskType:   MapTask,
 			FileName:   []string{file},
-			TaskId:     i,
+			TaskId:     generateTaskId(),
 			TaskStatus: TaskStatusPending,
 		}
 	}
