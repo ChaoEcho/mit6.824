@@ -250,9 +250,11 @@ func (c *Coordinator) checkTaskStatus() {
 			if c.CoordinatorStatus == CoordinatorMapStatus {
 				c.CoordinatorStatus = CoordinatorReduceStatus
 				slog.Info("Time out, Coordinator Status From Map to Reduce!!!")
+				time.Sleep(10 * time.Second)
 			} else if c.CoordinatorStatus == CoordinatorReduceStatus {
 				c.CoordinatorStatus = CoordinatorDoneStatus
 				slog.Info("Time out, Coordinator Status From Reduce to Done!!!")
+				time.Sleep(10 * time.Second)
 			}
 		}
 		time.Sleep(3 * time.Second)

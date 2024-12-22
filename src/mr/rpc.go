@@ -36,7 +36,7 @@ func coordinatorSock() string {
 
 // 先创建另外一个
 func myCoordinatorSock() string {
-	s := "/var/tmp/my-5840-mr-"
+	s := "/var/tmp/5840-mr-"
 	s += strconv.Itoa(os.Getuid())
 	return s
 }
