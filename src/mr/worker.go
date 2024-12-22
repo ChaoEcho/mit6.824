@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"log/slog"
 	"net/rpc"
 	"os"
 	"time"
@@ -24,9 +25,13 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+
+	// 根据时间戳生成id，只保留后面4位数字
+	nowId := time.Now().UnixNano() % 10000
 
 	// Your worker implementation here.
 
@@ -34,24 +39,24 @@ func Worker(mapf func(string, string) []KeyValue,
 		// 获取任务
 		task, err := callAssignTask(&AssignTaskArgs{}, &AssignTaskReply{})
 		if err != nil {
-			fmt.Printf("assign task failed\n")
+			slog.Error(fmt.Sprintf("Worker %d assign task failed", nowId), "error", err)
 			return
 		}
 
 		// 如果所有任务都已完成，则退出
 		if task.TaskType == EmptyTask {
-			fmt.Printf("all task done\n")
+			slog.Info(fmt.Sprintf("Worker %d all task done", nowId))
 			break
 		} else if task.TaskType == WaitTask {
-			fmt.Printf("sleep for task\n")
-			time.Sleep(time.Second)
+			slog.Info(fmt.Sprintf("Worker %d sleep for task", nowId))
+			time.Sleep(time.Millisecond * 100)
 			continue
 		} else if task.TaskType == MapTask {
 			// 执行map任务
-			fmt.Printf("Do Map Task: %v\n", task)
+			slog.Info(fmt.Sprintf("Worker %d do map task", nowId), "task", task)
 			content, err := os.ReadFile(task.FileName[0])
 			if err != nil {
-				fmt.Printf("read file failed\n")
+				slog.Error(fmt.Sprintf("Worker %d read file failed", nowId), "error", err)
 				return
 			}
 			resKvs := mapf(task.FileName[0], string(content))
@@ -80,7 +85,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
 		} else if task.TaskType == ReduceTask {
 			// 初始化map
-			fmt.Printf("Do Reduce Task: %v\n", task)
+			slog.Info(fmt.Sprintf("Worker %d do reduce task", nowId), "task", task)
 			kvs := make(map[string][]string)
 			fileNames := task.FileName
 			// 读取所有中间文件
@@ -88,7 +93,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				// 打开文件，并读取所有kv对
 				ifile, err := os.Open(fileName)
 				if err != nil {
-					fmt.Printf("open file failed\n")
+					slog.Error(fmt.Sprintf("Worker %d open file failed", nowId), "error", err)
 					return
 				}
 				dec := json.NewDecoder(ifile)
@@ -110,15 +115,19 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 			fileName := fmt.Sprintf("mr-out-%d", ihash(key)%task.NReduce)
 			ofile, err := os.Create(fileName)
+			if err != nil {
+				slog.Error(fmt.Sprintf("Worker %d create file failed", nowId), "error", err)
+				return
+			}
 			for key, values := range kvs {
 				output := reducef(key, values)
 				// 将结果写入文件
-				if err != nil {
-					fmt.Printf("create file failed\n")
+				if _, err := ofile.WriteString(fmt.Sprintf("%v %v\n", key, output)); err != nil {
+					slog.Error(fmt.Sprintf("Worker %d write file failed", nowId), "error", err)
 					return
 				}
 				// 追加模式写入文件
-				ofile.WriteString(fmt.Sprintf("%v %v\n", key, output))
+				// ofile.WriteString(fmt.Sprintf("%v %v\n", key, output))
 				// fmt.Fprintf(ofile, "%v %v\n", key, output)
 			}
 			ofile.Close()

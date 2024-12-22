@@ -3,6 +3,7 @@ package mr
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -127,14 +128,16 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 		c.CoordinatorStatus = CoordinatorReduceStatus
 		// 初始化reduce任务列表
 		c.UnstartedTaskList = make([]Task, c.NReduce)
-		fmt.Printf("NReduce: %d\n", c.NReduce)
+		// fmt.Printf("NReduce: %d\n", c.NReduce)
+		slog.Info(fmt.Sprintf("Coordinator status from Map to Reduce, NReduce: %d", c.NReduce))
 		for i := 0; i < c.NReduce; i++ {
 			// 所有中间文件命名为 mr-X-Y,其中X是任务id，Y是reduce任务id
 			var allFiles []string
 
 			allFiles, err := filepath.Glob("mr-*")
 			if err != nil {
-				log.Fatal("glob failed", err)
+				slog.Error("Coordinator glob failed", "error", err)
+				return err
 			}
 			// fmt.Printf("i: %d, allFiles: %v\n", i, allFiles)
 			// 遍历所有中间文件，找到后缀为i的文件
@@ -144,7 +147,7 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 					files = append(files, file)
 				}
 			}
-			fmt.Printf("i: %d, files: %v\n", i, files)
+			// slog.Info(fmt.Sprintf("i: %d, files: %v", i, files))
 			c.UnstartedTaskList[i] = Task{
 				TaskType:   ReduceTask,
 				TaskId:     generateTaskId(),
@@ -156,7 +159,7 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 		//fmt.Printf("Status from Map to Reduce: %v\n", c.CoordinatorStatus)
 		//fmt.Printf("UnstartedTaskList: %v\n", c.UnstartedTaskList)
 	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.RunningTaskList) == 0 && len(c.UnstartedTaskList) == 0 {
-		fmt.Printf("Status from Reduce to Done: %v\n", c.CoordinatorStatus)
+		slog.Info("Coordinator Status from Reduce to Done", "status", c.CoordinatorStatus)
 		c.CoordinatorStatus = CoordinatorDoneStatus
 	}
 
@@ -180,7 +183,8 @@ func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) e
 	var task Task
 	if c.CoordinatorStatus == CoordinatorMapStatus && len(c.UnstartedTaskList) > 0 {
 		task = c.UnstartedTaskList[0]
-		fmt.Printf("Assign Map Task: %v\n", task)
+		// fmt.Printf("Assign Map Task: %v\n", task)
+		slog.Info(fmt.Sprintf("Coordinator Assign Map Task: %v", task))
 		c.UnstartedTaskList = c.UnstartedTaskList[1:]
 		task.TaskStatus = TaskStatusRunning
 		task.TaskStartTime = time.Now()
@@ -188,7 +192,8 @@ func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) e
 	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.UnstartedTaskList) > 0 {
 		// fmt.Printf("Assign Reduce Task: %v\n", c.UnstartedTaskList)
 		task = c.UnstartedTaskList[0]
-		fmt.Printf("Assign Reduce Task: %v\n", task)
+		// fmt.Printf("Assign Reduce Task: %v\n", task)
+		slog.Info(fmt.Sprintf("Coordinator Assign Reduce Task: %v", task))
 		c.UnstartedTaskList = c.UnstartedTaskList[1:]
 		task.TaskStatus = TaskStatusRunning
 		task.TaskStartTime = time.Now()
