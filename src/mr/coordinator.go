@@ -55,6 +55,8 @@ type TaskType int
 const (
 	MapTask TaskType = iota
 	ReduceTask
+	WaitTask
+	EmptyTask
 )
 
 type TaskStatus int
@@ -121,7 +123,30 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 		for i := 0; i < c.nReduce; i++ {
 			// 所有中间文件命名为 mr-X-Y,其中X是任务id，Y是reduce任务id
 			var allFiles []string
-			// 在当前目录下，找到所有中间文件
+			// 在mr-tmp目录下，找到所有中间文件
+
+			// 获取当前工作目录
+			// dir, err := os.Getwd()
+			// if err != nil {
+			// 	log.Fatal(err)
+			// }
+			// fmt.Println("Current working directory:", dir)
+
+			// // 使用filepath.Walk递归遍历目录树
+			// err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			// 	if err != nil {
+			// 		return err
+			// 	}
+			// 	if !info.IsDir() {
+			// 		fmt.Println(info.Name()) // 或者你也可以打印完整路径：fmt.Println(path)
+			// 	}
+			// 	return nil
+			// })
+
+			// if err != nil {
+			// 	log.Fatal("Walk failed:", err)
+			// }
+
 			allFiles, err := filepath.Glob("mr-*")
 			if err != nil {
 				log.Fatal("glob failed", err)
@@ -141,6 +166,8 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 				NReduce:    c.nReduce,
 			}
 		}
+		fmt.Printf("Status from Map to Reduce: %v\n", c.CoordinatorStatus)
+		fmt.Printf("UnstartedTaskList: %v\n", c.UnstartedTaskList)
 	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.RunningTaskList) == 0 {
 		c.CoordinatorStatus = CoordinatorDoneStatus
 	}
@@ -162,21 +189,29 @@ func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) e
 	mu.Lock()
 	defer mu.Unlock()
 	var task Task
-	if c.CoordinatorStatus == CoordinatorMapStatus {
+	if c.CoordinatorStatus == CoordinatorMapStatus && len(c.UnstartedTaskList) > 0 {
 		task = c.UnstartedTaskList[0]
-		fmt.Printf("AssignTask: %v\n", task)
+		fmt.Printf("Assign Map Task: %v\n", task)
 		c.UnstartedTaskList = c.UnstartedTaskList[1:]
 		task.TaskStatus = TaskStatusRunning
 		task.TaskStartTime = time.Now()
 		c.RunningTaskList = append(c.RunningTaskList, task)
-	} else if c.CoordinatorStatus == CoordinatorReduceStatus {
-		task = c.RunningTaskList[0]
-		c.RunningTaskList = c.RunningTaskList[1:]
+	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.UnstartedTaskList) > 0 {
+		task = c.UnstartedTaskList[0]
+		fmt.Printf("Assign Reduce Task: %v\n", task)
+		c.UnstartedTaskList = c.UnstartedTaskList[1:]
 		task.TaskStatus = TaskStatusRunning
 		task.TaskStartTime = time.Now()
 		c.RunningTaskList = append(c.RunningTaskList, task)
 	} else if c.CoordinatorStatus == CoordinatorDoneStatus {
-		task = Task{}
+		// 如果所有任务都已完成，则返回空任务
+		task = Task{
+			TaskType: EmptyTask,
+		}
+	} else {
+		task = Task{
+			TaskType: WaitTask,
+		}
 	}
 	reply.Task = task
 	return nil
@@ -195,7 +230,7 @@ func generateTaskId() int {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
-	fmt.Printf("files: %v, nReduce: %d\n", files, nReduce)
+	//fmt.Printf("files: %v, nReduce: %d\n", files, nReduce)
 	// 初始化任务列表
 	c.UnstartedTaskList = make([]Task, len(files))
 	for i, file := range files {
@@ -206,7 +241,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			TaskStatus: TaskStatusPending,
 			NReduce:    nReduce,
 		}
-		fmt.Printf("UnstartedTaskList[%d]: %v\n", i, c.UnstartedTaskList[i])
+		// fmt.Printf("UnstartedTaskList[%d]: %v\n", i, c.UnstartedTaskList[i])
 	}
 
 	c.nReduce = nReduce

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -29,74 +30,93 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 
-	// 获取任务
-	task, err := callAssignTask(&AssignTaskArgs{}, &AssignTaskReply{})
-	if err != nil {
-		fmt.Printf("assign task failed\n")
-		return
+	for {
+		// 获取任务
+		task, err := callAssignTask(&AssignTaskArgs{}, &AssignTaskReply{})
+		if err != nil {
+			fmt.Printf("assign task failed\n")
+			return
+		}
+
+		// 如果所有任务都已完成，则退出
+		if task.TaskType == EmptyTask {
+			break
+		} else if task.TaskType == WaitTask {
+			time.Sleep(time.Second)
+			continue
+		} else if task.TaskType == MapTask {
+			// 执行map任务
+			fmt.Printf("Do Map Task: %v\n", task)
+			content, err := os.ReadFile(task.FileName[0])
+			if err != nil {
+				fmt.Printf("read file failed\n")
+				return
+			}
+			resKvs := mapf(task.FileName[0], string(content))
+
+			// 遍历resKvs，先按照hash分类，加入到列表，然后批量写入文件
+			kvs := make(map[int][]KeyValue)
+			for _, kv := range resKvs {
+				hash := ihash(kv.Key) % task.NReduce
+				kvs[hash] = append(kvs[hash], kv)
+			}
+
+			for hash, kvs := range kvs {
+				fileName := fmt.Sprintf("mr-%d-%d", task.TaskId, hash)
+				ofile, err := os.Create(fileName)
+				if err != nil {
+					fmt.Printf("create file failed\n")
+					return
+				}
+				enc := json.NewEncoder(ofile)
+				for _, kv := range kvs {
+					enc.Encode(kv)
+				}
+				ofile.Close()
+			}
+			// 通知任务完成
+			callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
+		} else if task.TaskType == ReduceTask {
+			// 初始化map
+			fmt.Printf("Do Reduce Task: %v\n", task)
+			kvs := make(map[string][]string)
+			fileNames := task.FileName
+			// 读取所有中间文件
+			for _, fileName := range fileNames {
+				// 打开文件，并读取所有kv对
+				ifile, err := os.Open(fileName)
+				if err != nil {
+					fmt.Printf("open file failed\n")
+					return
+				}
+				dec := json.NewDecoder(ifile)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					kvs[kv.Key] = append(kvs[kv.Key], kv.Value)
+				}
+				ifile.Close()
+				// 对每个key，调用reducef
+			}
+			for key, values := range kvs {
+				output := reducef(key, values)
+				// 将结果写入文件
+				fileName := fmt.Sprintf("mr-out-%d", ihash(key)%task.NReduce)
+				ofile, err := os.Create(fileName)
+				if err != nil {
+					fmt.Printf("create file failed\n")
+					return
+				}
+				fmt.Fprintf(ofile, "%v %v\n", key, output)
+				ofile.Close()
+			}
+			// 通知任务完成
+			callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
+		}
 	}
 
-	if task.TaskType == MapTask {
-		// 执行map任务
-		content, err := os.ReadFile(task.FileName[0])
-		if err != nil {
-			fmt.Printf("read file failed\n")
-			return
-		}
-		resKvs := mapf(task.FileName[0], string(content))
-		// 将结果写入文件
-		fileName := fmt.Sprintf("mr-%d-%d", task.TaskId, ihash(resKvs[0].Key)%task.NReduce)
-		// 以JSON格式写入文件
-		ofile, err := os.Create(fileName)
-		if err != nil {
-			fmt.Printf("create file failed\n")
-			return
-		}
-		enc := json.NewEncoder(ofile)
-		for _, kv := range resKvs {
-			enc.Encode(kv)
-		}
-		ofile.Close()
-		// 通知任务完成
-		callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
-	} else if task.TaskType == ReduceTask {
-		// 初始化map
-		kvs := make(map[string][]string)
-		fileNames := task.FileName
-		// 读取所有中间文件
-		for _, fileName := range fileNames {
-			// 打开文件，并读取所有kv对
-			ifile, err := os.Open(fileName)
-			if err != nil {
-				fmt.Printf("open file failed\n")
-				return
-			}
-			dec := json.NewDecoder(ifile)
-			for {
-				var kv KeyValue
-				if err := dec.Decode(&kv); err != nil {
-					break
-				}
-				kvs[kv.Key] = append(kvs[kv.Key], kv.Value)
-			}
-			ifile.Close()
-			// 对每个key，调用reducef
-		}
-		for key, values := range kvs {
-			output := reducef(key, values)
-			// 将结果写入文件
-			fileName := fmt.Sprintf("mr-out-%d", ihash(key)%task.NReduce)
-			ofile, err := os.Create(fileName)
-			if err != nil {
-				fmt.Printf("create file failed\n")
-				return
-			}
-			fmt.Fprintf(ofile, "%v %v\n", key, output)
-			ofile.Close()
-		}
-		// 通知任务完成
-		callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
-	}
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -129,7 +149,7 @@ func CallExample() {
 func callAssignTask(args *AssignTaskArgs, reply *AssignTaskReply) (Task, error) {
 	ok := call("Coordinator.AssignTask", args, reply)
 	if ok {
-		fmt.Printf("assign task %v\n", reply.Task)
+		// fmt.Printf("assign task %v\n", reply.Task)
 		return reply.Task, nil
 	} else {
 		return Task{}, fmt.Errorf("assign task failed")
