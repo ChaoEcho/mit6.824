@@ -93,6 +93,30 @@ func (c *Coordinator) Done() bool {
 	return ret
 }
 
+func (c *Coordinator) AssignTask() Task {
+	var task Task
+	if c.CoordinatorStatus == CoordinatorMapStatus {
+		// 从未开始任务列表中取一个任务
+		task = c.UnstartedTaskList[0]
+		// 将任务从未开始任务列表中移除
+		c.UnstartedTaskList = append(c.UnstartedTaskList[:0], c.UnstartedTaskList[1:]...)
+		// 将任务添加到正在执行任务列表中
+		task.TaskStatus = TaskStatusRunning
+		task.TaskStartTime = time.Now()
+		c.RunningTaskList = append(c.RunningTaskList, task)
+	} else if c.CoordinatorStatus == CoordinatorReduceStatus {
+		task = c.RunningTaskList[0]
+		c.RunningTaskList = append(c.RunningTaskList[:0], c.RunningTaskList[1:]...)
+		task.TaskStatus = TaskStatusRunning
+		task.TaskStartTime = time.Now()
+		c.RunningTaskList = append(c.RunningTaskList, task)
+	} else if c.CoordinatorStatus == CoordinatorDoneStatus {
+		// 如果所有任务都已完成，则返回一个空的任务
+		task = Task{}
+	}
+	return task
+}
+
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
