@@ -1,11 +1,15 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -41,6 +45,8 @@ type Task struct {
 	TaskStatus TaskStatus
 	// 任务开始时间
 	TaskStartTime time.Time
+	// NReduce
+	NReduce int
 }
 
 type TaskType int
@@ -83,15 +89,19 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-type DoneArgs struct {
+func (c *Coordinator) Done() bool {
+	return c.CoordinatorStatus == CoordinatorDoneStatus
+}
+
+type DoneTaskArgs struct {
 	Task Task
 }
 
-type DoneReply struct {
+type DoneTaskReply struct {
 }
 
 // worker调用Done来标记任务完成，Coordianator则将任务添加到已完成任务列表中
-func (c *Coordinator) Done(args *DoneArgs, reply *DoneReply) error {
+func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 	// 遍历正在执行任务列表，找到对应任务，然后移除
 	for i, task := range c.RunningTaskList {
 		if task.TaskId == args.Task.TaskId {
@@ -105,6 +115,31 @@ func (c *Coordinator) Done(args *DoneArgs, reply *DoneReply) error {
 	// 如果当前阶段是Map阶段，并且所有任务都已完成，则切换到Reduce阶段
 	if c.CoordinatorStatus == CoordinatorMapStatus && len(c.RunningTaskList) == 0 {
 		c.CoordinatorStatus = CoordinatorReduceStatus
+		// 初始化reduce任务列表
+		c.UnstartedTaskList = make([]Task, c.nReduce)
+		for i := 0; i < c.nReduce; i++ {
+			// 所有中间文件命名为 mr-X-Y,其中X是任务id，Y是reduce任务id
+			var allFiles []string
+			// 在当前目录下，找到所有中间文件
+			allFiles, err := filepath.Glob("mr-*")
+			if err != nil {
+				log.Fatal("glob failed", err)
+			}
+			// 遍历所有中间文件，找到后缀为i的文件
+			var files []string
+			for _, file := range allFiles {
+				if strings.HasSuffix(file, strconv.Itoa(i)) {
+					files = append(files, file)
+				}
+			}
+			c.UnstartedTaskList[i] = Task{
+				TaskType:   ReduceTask,
+				TaskId:     generateTaskId(),
+				TaskStatus: TaskStatusPending,
+				FileName:   files,
+				NReduce:    c.nReduce,
+			}
+		}
 	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.RunningTaskList) == 0 {
 		c.CoordinatorStatus = CoordinatorDoneStatus
 	}
@@ -123,22 +158,19 @@ type AssignTaskReply struct {
 func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) error {
 	var task Task
 	if c.CoordinatorStatus == CoordinatorMapStatus {
-		// 从未开始任务列表中取一个任务
 		task = c.UnstartedTaskList[0]
-		// 将任务从未开始任务列表中移除
-		c.UnstartedTaskList = append(c.UnstartedTaskList[:0], c.UnstartedTaskList[1:]...)
-		// 将任务添加到正在执行任务列表中
+		fmt.Printf("AssignTask: %v\n", task)
+		c.UnstartedTaskList = c.UnstartedTaskList[1:]
 		task.TaskStatus = TaskStatusRunning
 		task.TaskStartTime = time.Now()
 		c.RunningTaskList = append(c.RunningTaskList, task)
 	} else if c.CoordinatorStatus == CoordinatorReduceStatus {
 		task = c.RunningTaskList[0]
-		c.RunningTaskList = append(c.RunningTaskList[:0], c.RunningTaskList[1:]...)
+		c.RunningTaskList = c.RunningTaskList[1:]
 		task.TaskStatus = TaskStatusRunning
 		task.TaskStartTime = time.Now()
 		c.RunningTaskList = append(c.RunningTaskList, task)
 	} else if c.CoordinatorStatus == CoordinatorDoneStatus {
-		// 如果所有任务都已完成，则返回一个空的任务
 		task = Task{}
 	}
 	reply.Task = task
@@ -158,7 +190,7 @@ func generateTaskId() int {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
-
+	fmt.Printf("files: %v, nReduce: %d\n", files, nReduce)
 	// 初始化任务列表
 	c.UnstartedTaskList = make([]Task, len(files))
 	for i, file := range files {
@@ -167,7 +199,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			FileName:   []string{file},
 			TaskId:     generateTaskId(),
 			TaskStatus: TaskStatusPending,
+			NReduce:    nReduce,
 		}
+		fmt.Printf("UnstartedTaskList[%d]: %v\n", i, c.UnstartedTaskList[i])
 	}
 
 	c.nReduce = nReduce
