@@ -31,6 +31,8 @@ type Coordinator struct {
 	assignTaskMu sync.Mutex
 	// 任务完成锁
 	doneTaskMu sync.Mutex
+	// 上次任务完成时间
+	lastTaskDoneTime time.Time
 }
 
 type CoordinatorStatus int
@@ -118,13 +120,21 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 	// 遍历正在执行任务列表，找到对应任务，然后移除
 	for i, task := range c.RunningTaskList {
 		if task.TaskId == args.Task.TaskId {
+			// 检查任务是否超时
+			if time.Since(task.TaskStartTime) > 10*time.Second {
+				c.UnstartedTaskList = append(c.UnstartedTaskList, task)
+				c.RunningTaskList = append(c.RunningTaskList[:i], c.RunningTaskList[i+1:]...)
+				slog.Info(fmt.Sprintf("Coordinator done task %d is timeout", task.TaskId))
+				return fmt.Errorf("task %d is timeout", task.TaskId)
+			}
 			c.RunningTaskList = append(c.RunningTaskList[:i], c.RunningTaskList[i+1:]...)
 			break
 		}
 	}
 	// 将任务添加到已完成任务列表中
 	c.CompletedTaskList = append(c.CompletedTaskList, args.Task)
-
+	// 更新上次任务完成时间
+	c.lastTaskDoneTime = time.Now()
 	// 如果当前阶段是Map阶段，并且所有任务都已完成，则切换到Reduce阶段
 	if c.CoordinatorStatus == CoordinatorMapStatus && len(c.RunningTaskList) == 0 && len(c.UnstartedTaskList) == 0 {
 		c.CoordinatorStatus = CoordinatorReduceStatus
@@ -177,8 +187,6 @@ type AssignTaskReply struct {
 	Task Task
 }
 
-
-
 func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) error {
 	// 加锁
 	c.assignTaskMu.Lock()
@@ -215,10 +223,47 @@ func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) e
 	return nil
 }
 
+// 检查任务状态
+func (c *Coordinator) checkTaskStatus() {
+	for {
+		slog.Info("Coordinator checkTaskStatus running", "status", c.CoordinatorStatus, "UnStart Size", len(c.UnstartedTaskList), "Running Size", len(c.RunningTaskList), "Completed Size", len(c.CompletedTaskList))
+		for _, task := range c.RunningTaskList {
+			if task.TaskStatus == TaskStatusRunning && time.Since(task.TaskStartTime) > 10*time.Second {
+				c.doneTaskMu.Lock()
+				c.assignTaskMu.Lock()
+				slog.Info(fmt.Sprintf("Coordinator checkTaskStatus task %d is timeout", task.TaskId))
+				task.TaskStatus = TaskStatusPending
+				c.UnstartedTaskList = append(c.UnstartedTaskList, task)
+				// 需要移除该任务
+				for i, t := range c.RunningTaskList {
+					if t.TaskId == task.TaskId {
+						c.RunningTaskList = append(c.RunningTaskList[:i], c.RunningTaskList[i+1:]...)
+						break
+					}
+				}
+				c.assignTaskMu.Unlock()
+				c.doneTaskMu.Unlock()
+			}
+		}
+		// 如果上次任务完成时间超过10秒，则切换到Reduce阶段
+		if time.Since(c.lastTaskDoneTime) > 60*time.Second {
+			if c.CoordinatorStatus == CoordinatorMapStatus {
+				c.CoordinatorStatus = CoordinatorReduceStatus
+				slog.Info("Time out, Coordinator Status From Map to Reduce!!!")
+			} else if c.CoordinatorStatus == CoordinatorReduceStatus {
+				c.CoordinatorStatus = CoordinatorDoneStatus
+				slog.Info("Time out, Coordinator Status From Reduce to Done!!!")
+			}
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
 // 全局任务id
 var taskId int = 0
 
 var generateTaskIdMu sync.Mutex
+
 func generateTaskId() int {
 	generateTaskIdMu.Lock()
 	defer generateTaskIdMu.Unlock()
@@ -246,11 +291,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 
 	c.NReduce = nReduce
-
+	c.lastTaskDoneTime = time.Now()
 	c.CoordinatorStatus = CoordinatorMapStatus
 
 	// Your code here.
 	// 创建一个协调者，然后来分配任务？
+
+	// 启动一个协程来检查任务状态
+	go c.checkTaskStatus()
 
 	c.server()
 	return &c

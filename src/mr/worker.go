@@ -25,7 +25,6 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
@@ -49,7 +48,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			break
 		} else if task.TaskType == WaitTask {
 			slog.Info(fmt.Sprintf("Worker %d sleep for task", nowId))
-			time.Sleep(time.Millisecond * 100)
+			time.Sleep(time.Second)
 			continue
 		} else if task.TaskType == MapTask {
 			// 执行map任务
