@@ -113,6 +113,8 @@ fi
 # wait for remaining workers and coordinator to exit.
 wait
 
+# 提前退出脚本
+exit 0
 #########################################################
 # now indexer
 rm -f mr-*

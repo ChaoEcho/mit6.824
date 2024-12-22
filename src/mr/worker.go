@@ -40,8 +40,10 @@ func Worker(mapf func(string, string) []KeyValue,
 
 		// 如果所有任务都已完成，则退出
 		if task.TaskType == EmptyTask {
+			fmt.Printf("all task done\n")
 			break
 		} else if task.TaskType == WaitTask {
+			fmt.Printf("sleep for task\n")
 			time.Sleep(time.Second)
 			continue
 		} else if task.TaskType == MapTask {
@@ -100,18 +102,26 @@ func Worker(mapf func(string, string) []KeyValue,
 				ifile.Close()
 				// 对每个key，调用reducef
 			}
+			// 随机获取一个key，然后取hash
+			var key string
+			for k := range kvs {
+				key = k
+				break
+			}
+			fileName := fmt.Sprintf("mr-out-%d", ihash(key)%task.NReduce)
+			ofile, err := os.Create(fileName)
 			for key, values := range kvs {
 				output := reducef(key, values)
 				// 将结果写入文件
-				fileName := fmt.Sprintf("mr-out-%d", ihash(key)%task.NReduce)
-				ofile, err := os.Create(fileName)
 				if err != nil {
 					fmt.Printf("create file failed\n")
 					return
 				}
-				fmt.Fprintf(ofile, "%v %v\n", key, output)
-				ofile.Close()
+				// 追加模式写入文件
+				ofile.WriteString(fmt.Sprintf("%v %v\n", key, output))
+				// fmt.Fprintf(ofile, "%v %v\n", key, output)
 			}
+			ofile.Close()
 			// 通知任务完成
 			callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
 		}
@@ -159,7 +169,7 @@ func callAssignTask(args *AssignTaskArgs, reply *AssignTaskReply) (Task, error) 
 func callDoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 	ok := call("Coordinator.DoneTask", args, reply)
 	if ok {
-		fmt.Printf("done task %v\n", args.Task)
+		// fmt.Printf("done task %v\n", args.Task)
 		return nil
 	} else {
 		return fmt.Errorf("done task failed")
