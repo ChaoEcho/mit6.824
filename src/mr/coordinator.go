@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -156,6 +157,10 @@ type AssignTaskReply struct {
 }
 
 func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) error {
+	// 加锁
+	var mu sync.Mutex
+	mu.Lock()
+	defer mu.Unlock()
 	var task Task
 	if c.CoordinatorStatus == CoordinatorMapStatus {
 		task = c.UnstartedTaskList[0]
