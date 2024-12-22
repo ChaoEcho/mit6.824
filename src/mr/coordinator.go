@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +26,10 @@ type Coordinator struct {
 	NReduce int
 	// Coordinator的状态
 	CoordinatorStatus CoordinatorStatus
+	// 任务分配锁
+	assignTaskMu sync.Mutex
+	// 任务完成锁
+	doneTaskMu sync.Mutex
 }
 
 type CoordinatorStatus int
@@ -106,6 +109,9 @@ type DoneTaskReply struct {
 
 // worker调用Done来标记任务完成，Coordianator则将任务添加到已完成任务列表中
 func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
+	// 加锁
+	c.doneTaskMu.Lock()
+	defer c.doneTaskMu.Unlock()
 	// 遍历正在执行任务列表，找到对应任务，然后移除
 	for i, task := range c.RunningTaskList {
 		if task.TaskId == args.Task.TaskId {
@@ -138,7 +144,7 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 					files = append(files, file)
 				}
 			}
-			//fmt.Printf("i: %d, files: %v\n", i, files)
+			fmt.Printf("i: %d, files: %v\n", i, files)
 			c.UnstartedTaskList[i] = Task{
 				TaskType:   ReduceTask,
 				TaskId:     generateTaskId(),
@@ -165,11 +171,12 @@ type AssignTaskReply struct {
 	Task Task
 }
 
+
+
 func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) error {
 	// 加锁
-	var mu sync.Mutex
-	mu.Lock()
-	defer mu.Unlock()
+	c.assignTaskMu.Lock()
+	defer c.assignTaskMu.Unlock()
 	var task Task
 	if c.CoordinatorStatus == CoordinatorMapStatus && len(c.UnstartedTaskList) > 0 {
 		task = c.UnstartedTaskList[0]
@@ -201,11 +208,14 @@ func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) e
 }
 
 // 全局任务id
-var taskId int32 = 0
+var taskId int = 0
 
+var generateTaskIdMu sync.Mutex
 func generateTaskId() int {
-	atomic.AddInt32(&taskId, 1)
-	return int(taskId)
+	generateTaskIdMu.Lock()
+	defer generateTaskIdMu.Unlock()
+	taskId++
+	return taskId
 }
 
 // create a Coordinator.
