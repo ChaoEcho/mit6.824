@@ -91,118 +91,28 @@ sort mr-out-0 > mr-correct-indexer.txt
 rm -f mr-out*
 
 #########################################################
-echo '***' Starting map parallelism test.
+
+#########################################################
+echo '***' Starting reduce parallelism test.
 
 rm -f mr-*
 
 maybe_quiet $TIMEOUT ../mrcoordinator ../pg*txt &
 sleep 1
 
-maybe_quiet $TIMEOUT ../mrworker ../../mrapps/mtiming.so &
-maybe_quiet $TIMEOUT ../mrworker ../../mrapps/mtiming.so
+maybe_quiet $TIMEOUT ../mrworker ../../mrapps/rtiming.so  &
+maybe_quiet $TIMEOUT ../mrworker ../../mrapps/rtiming.so
 
-NT=`cat mr-out* | grep '^times-' | wc -l | sed 's/ //g'`
-if [ "$NT" != "2" ]
+NT=`cat mr-out* | grep '^[a-z] 2' | wc -l | sed 's/ //g'`
+if [ "$NT" -lt "2" ]
 then
-  echo '---' saw "$NT" workers rather than 2
-  echo '---' map parallelism test: FAIL
+  echo '---' too few parallel reduces.
+  echo '---' reduce parallelism test: FAIL
   failed_any=1
-fi
-
-if cat mr-out* | grep '^parallel.* 2' > /dev/null
-then
-  echo '---' map parallelism test: PASS
 else
-  echo '---' map workers did not run in parallel
-  echo '---' map parallelism test: FAIL
-  failed_any=1
-fi
-
-wait
-
-
-#########################################################
-
-
-exit 0
-# todo
-echo '***' Starting indexer test.
-
-maybe_quiet $TIMEOUT ../mrcoordinator ../pg*txt &
-sleep 1
-
-# start multiple workers
-maybe_quiet $TIMEOUT ../mrworker ../../mrapps/indexer.so &
-maybe_quiet $TIMEOUT ../mrworker ../../mrapps/indexer.so
-
-sort mr-out* | grep . > mr-indexer-all
-if cmp mr-indexer-all mr-correct-indexer.txt
-then
-  echo '---' indexer test: PASS
-else
-  echo '---' indexer output is not the same as mr-correct-indexer.txt
-  echo '---' indexer test: FAIL
-  failed_any=1
+  echo '---' reduce parallelism test: PASS
 fi
 
 wait
 
 #########################################################
-exit 0
-# todo
-#########################################################
-echo '***' Starting crash test.
-
-# generate the correct output
-../mrsequential ../../mrapps/nocrash.so ../pg*txt || exit 1
-sort mr-out-0 > mr-correct-crash.txt
-rm -f mr-out*
-
-rm -f mr-done
-((maybe_quiet $TIMEOUT2 ../mrcoordinator ../pg*txt); touch mr-done ) &
-sleep 1
-
-# start multiple workers
-maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so &
-
-# mimic rpc.go's coordinatorSock()
-SOCKNAME=/var/tmp/5840-mr-`id -u`
-
-( while [ -e $SOCKNAME -a ! -f mr-done ]
-  do
-    maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so
-    sleep 1
-  done ) &
-
-( while [ -e $SOCKNAME -a ! -f mr-done ]
-  do
-    maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so
-    sleep 1
-  done ) &
-
-while [ -e $SOCKNAME -a ! -f mr-done ]
-do
-  maybe_quiet $TIMEOUT2 ../mrworker ../../mrapps/crash.so
-  sleep 1
-done
-
-wait
-
-rm $SOCKNAME
-sort mr-out* | grep . > mr-crash-all
-if cmp mr-crash-all mr-correct-crash.txt
-then
-  echo '---' crash test: PASS
-else
-  echo '---' crash output is not the same as mr-correct-crash.txt
-  echo '---' crash test: FAIL
-  failed_any=1
-fi
-
-#########################################################
-if [ $failed_any -eq 0 ]; then
-    echo '***' PASSED ALL TESTS
-else
-    echo '***' FAILED SOME TESTS
-    exit 1
-fi

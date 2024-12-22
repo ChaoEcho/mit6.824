@@ -112,6 +112,8 @@ type DoneTaskReply struct {
 func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 	// 加锁
 	c.doneTaskMu.Lock()
+	c.assignTaskMu.Lock()
+	defer c.assignTaskMu.Unlock()
 	defer c.doneTaskMu.Unlock()
 	// 遍历正在执行任务列表，找到对应任务，然后移除
 	for i, task := range c.RunningTaskList {
@@ -147,7 +149,7 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 					files = append(files, file)
 				}
 			}
-			// slog.Info(fmt.Sprintf("i: %d, files: %v", i, files))
+			slog.Info(fmt.Sprintf("Coordinator i: %d, files: %v", i, files))
 			c.UnstartedTaskList[i] = Task{
 				TaskType:   ReduceTask,
 				TaskId:     generateTaskId(),
@@ -156,6 +158,7 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 				NReduce:    c.NReduce,
 			}
 		}
+		slog.Info("Coordinator Status from Map to Reduce", "status", c.CoordinatorStatus)
 		//fmt.Printf("Status from Map to Reduce: %v\n", c.CoordinatorStatus)
 		//fmt.Printf("UnstartedTaskList: %v\n", c.UnstartedTaskList)
 	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.RunningTaskList) == 0 && len(c.UnstartedTaskList) == 0 {
