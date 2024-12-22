@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -200,11 +201,11 @@ func (c *Coordinator) AssignTask(args *AssignTaskArgs, reply *AssignTaskReply) e
 }
 
 // 全局任务id
-var taskId int = 0
+var taskId int32 = 0
 
 func generateTaskId() int {
-	taskId++
-	return taskId
+	atomic.AddInt32(&taskId, 1)
+	return int(taskId)
 }
 
 // create a Coordinator.
