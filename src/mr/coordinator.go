@@ -155,7 +155,8 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 			// 遍历所有中间文件，找到后缀为i的文件
 			var files []string
 			for _, file := range allFiles {
-				if strings.HasSuffix(file, strconv.Itoa(i)) {
+				if strings.HasSuffix(file, "-"+strconv.Itoa(i)) {
+
 					files = append(files, file)
 				}
 			}
@@ -173,6 +174,8 @@ func (c *Coordinator) DoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
 		//fmt.Printf("UnstartedTaskList: %v\n", c.UnstartedTaskList)
 	} else if c.CoordinatorStatus == CoordinatorReduceStatus && len(c.RunningTaskList) == 0 && len(c.UnstartedTaskList) == 0 {
 		slog.Info("Coordinator Status from Reduce to Done", "status", c.CoordinatorStatus)
+		// 这里如果直接切换，可能导致有的worker没有正常退出
+		time.Sleep(5 * time.Second)
 		c.CoordinatorStatus = CoordinatorDoneStatus
 	}
 
@@ -246,17 +249,17 @@ func (c *Coordinator) checkTaskStatus() {
 			}
 		}
 		// 如果上次任务完成时间超过10秒，则切换到Reduce阶段
-		if time.Since(c.lastTaskDoneTime) > 60*time.Second {
-			if c.CoordinatorStatus == CoordinatorMapStatus {
-				c.CoordinatorStatus = CoordinatorReduceStatus
-				slog.Info("Time out, Coordinator Status From Map to Reduce!!!")
-				time.Sleep(10 * time.Second)
-			} else if c.CoordinatorStatus == CoordinatorReduceStatus {
-				c.CoordinatorStatus = CoordinatorDoneStatus
-				slog.Info("Time out, Coordinator Status From Reduce to Done!!!")
-				time.Sleep(10 * time.Second)
-			}
-		}
+		// if time.Since(c.lastTaskDoneTime) > 60*time.Second {
+		// 	if c.CoordinatorStatus == CoordinatorMapStatus {
+		// 		c.CoordinatorStatus = CoordinatorReduceStatus
+		// 		slog.Info("Time out, Coordinator Status From Map to Reduce!!!")
+		// 		time.Sleep(10 * time.Second)
+		// 	} else if c.CoordinatorStatus == CoordinatorReduceStatus {
+		// 		c.CoordinatorStatus = CoordinatorDoneStatus
+		// 		slog.Info("Time out, Coordinator Status From Reduce to Done!!!")
+		// 		time.Sleep(10 * time.Second)
+		// 	}
+		// }
 		time.Sleep(3 * time.Second)
 	}
 }
@@ -280,16 +283,16 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	// 打开或创建日志文件
 	// 加个时间戳
-	file, err := os.OpenFile("/home/echochao/go_project/mit6824/log/lab1/app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		slog.Error("Failed to open log file", slog.Any("error", err))
-		os.Exit(1) // 或者采取其他适当的错误处理措施
-	}
+	// file, err := os.OpenFile("/home/echochao/go_project/mit6824/log/lab1/app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+	// 	slog.Error("Failed to open log file", slog.Any("error", err))
+	// 	os.Exit(1) // 或者采取其他适当的错误处理措施
+	// }
 
-	// 设置日志级别为error，INFO输出到文件中
-	// logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	logger := slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
+	// // 设置日志级别为error，INFO输出到文件中
+	// // logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	// logger := slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// slog.SetDefault(logger)
 
 	slog.Info("Coordinator MakeCoordinator running", "files", files, "nReduce", nReduce)
 

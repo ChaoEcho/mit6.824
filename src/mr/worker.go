@@ -31,16 +31,16 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// time.Sleep(time.Microsecond * 3)
 	// 打开或创建日志文件
-	file, err := os.OpenFile("/home/echochao/go_project/mit6824/log/lab1/app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		slog.Error("Failed to open log file", slog.Any("error", err))
-		os.Exit(1) // 或者采取其他适当的错误处理措施
-	}
-	logger := slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// file, err := os.OpenFile("/home/echochao/go_project/mit6824/log/lab1/app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+	// 	slog.Error("Failed to open log file", slog.Any("error", err))
+	// 	os.Exit(1) // 或者采取其他适当的错误处理措施
+	// }
+	// logger := slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// 设置日志级别为error，INFO输出到文件中
-	// logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	slog.SetDefault(logger)
+	// // 设置日志级别为error，INFO输出到文件中
+	// // logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	// slog.SetDefault(logger)
 
 	// 根据时间戳生成id，只保留后面4位数字
 	nowId := time.Now().UnixNano() % 10000
@@ -49,6 +49,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 
+	sleepCnt := 0
 	for {
 		// 获取任务
 		task, err := callAssignTask(&AssignTaskArgs{}, &AssignTaskReply{})
@@ -62,8 +63,13 @@ func Worker(mapf func(string, string) []KeyValue,
 			slog.Info(fmt.Sprintf("Worker %d all task done", nowId))
 			break
 		} else if task.TaskType == WaitTask {
-			slog.Info(fmt.Sprintf("Worker %d sleep for task", nowId))
-			time.Sleep(time.Second)
+			sleepCnt++
+			if sleepCnt%10 == 0 {
+				slog.Info(fmt.Sprintf("Worker %d sleep for task", nowId))
+			}
+			// time.Sleep(time.Second)
+			// 睡了一秒钟，起来天塌了
+			time.Sleep(time.Millisecond * 100)
 			continue
 		} else if task.TaskType == MapTask {
 			// 执行map任务
@@ -95,6 +101,8 @@ func Worker(mapf func(string, string) []KeyValue,
 				}
 				ofile.Close()
 			}
+			// 你也休息一下
+			time.Sleep(time.Millisecond * 50)
 			// 通知任务完成
 			callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
 		} else if task.TaskType == ReduceTask {
@@ -145,6 +153,8 @@ func Worker(mapf func(string, string) []KeyValue,
 				// fmt.Fprintf(ofile, "%v %v\n", key, output)
 			}
 			ofile.Close()
+			// 干完活不知道休息一下吗
+			time.Sleep(time.Millisecond * 50)
 			// 通知任务完成
 			callDoneTask(&DoneTaskArgs{Task: task}, &DoneTaskReply{})
 		}

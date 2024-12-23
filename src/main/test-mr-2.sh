@@ -74,45 +74,31 @@ rm -f mr-*
 
 failed_any=0
 
-#########################################################
-# first word-count
-
-# generate the correct output
-../mrsequential ../../mrapps/wc.so ../pg*txt || exit 1
-sort mr-out-0 > mr-correct-wc.txt
-rm -f mr-out*
-
-# now indexer
-rm -f mr-*
-
-# generate the correct output
-../mrsequential ../../mrapps/indexer.so ../pg*txt || exit 1
-sort mr-out-0 > mr-correct-indexer.txt
-rm -f mr-out*
-
-#########################################################
-
-#########################################################
-echo '***' Starting reduce parallelism test.
+echo '***' Starting map parallelism test.
 
 rm -f mr-*
 
 maybe_quiet $TIMEOUT ../mrcoordinator ../pg*txt &
 sleep 1
 
-maybe_quiet $TIMEOUT ../mrworker ../../mrapps/rtiming.so  &
-maybe_quiet $TIMEOUT ../mrworker ../../mrapps/rtiming.so
+maybe_quiet $TIMEOUT ../mrworker ../../mrapps/mtiming.so &
+maybe_quiet $TIMEOUT ../mrworker ../../mrapps/mtiming.so
 
-NT=`cat mr-out* | grep '^[a-z] 2' | wc -l | sed 's/ //g'`
-if [ "$NT" -lt "2" ]
+NT=`cat mr-out* | grep '^times-' | wc -l | sed 's/ //g'`
+if [ "$NT" != "2" ]
 then
-  echo '---' too few parallel reduces.
-  echo '---' reduce parallelism test: FAIL
+  echo '---' saw "$NT" workers rather than 2
+  echo '---' map parallelism test: FAIL
   failed_any=1
+fi
+
+if cat mr-out* | grep '^parallel.* 2' > /dev/null
+then
+  echo '---' map parallelism test: PASS
 else
-  echo '---' reduce parallelism test: PASS
+  echo '---' map workers did not run in parallel
+  echo '---' map parallelism test: FAIL
+  failed_any=1
 fi
 
 wait
-
-#########################################################
