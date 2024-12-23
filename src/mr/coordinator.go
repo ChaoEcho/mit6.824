@@ -277,6 +277,11 @@ func generateTaskId() int {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
+
+	// 设置日志级别为error，INFO输出到文件中
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	slog.SetDefault(logger)
+
 	c := Coordinator{}
 	//fmt.Printf("files: %v, nReduce: %d\n", files, nReduce)
 	// 初始化任务列表

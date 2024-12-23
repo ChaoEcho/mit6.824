@@ -30,6 +30,10 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	
 	time.Sleep(time.Microsecond*3)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	slog.SetDefault(logger)
+	
 	// 根据时间戳生成id，只保留后面4位数字
 	nowId := time.Now().UnixNano() % 10000
 
