@@ -280,17 +280,16 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	// 打开或创建日志文件
 	// 加个时间戳
-	// timestamp := time.Now().Format("2024-01-01-12-00-00")
-	// file, err := os.OpenFile("/home/echochao/go_project/mit6824/log/lab1/app-coordinator-"+timestamp+".log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	// if err != nil {
-	// 	slog.Error("Failed to open log file", slog.Any("error", err))
-	// 	os.Exit(1) // 或者采取其他适当的错误处理措施
-	// }
+	file, err := os.OpenFile("/home/echochao/go_project/mit6824/log/lab1/app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		slog.Error("Failed to open log file", slog.Any("error", err))
+		os.Exit(1) // 或者采取其他适当的错误处理措施
+	}
 
-	// // 设置日志级别为error，INFO输出到文件中
-	// // logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	// logger := slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	// slog.SetDefault(logger)
+	// 设置日志级别为error，INFO输出到文件中
+	// logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	logger := slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
 
 	slog.Info("Coordinator MakeCoordinator running", "files", files, "nReduce", nReduce)
 
