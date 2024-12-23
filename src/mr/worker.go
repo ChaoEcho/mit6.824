@@ -129,30 +129,33 @@ func Worker(mapf func(string, string) []KeyValue,
 				ifile.Close()
 				// 对每个key，调用reducef
 			}
+			slog.Info(fmt.Sprintf("Worker %d do reduce task", nowId), "kvs", kvs)
 			// 随机获取一个key，然后取hash
-			var key string
-			for k := range kvs {
-				key = k
-				break
-			}
-			fileName := fmt.Sprintf("mr-out-%d", ihash(key)%task.NReduce)
-			ofile, err := os.Create(fileName)
-			if err != nil {
-				slog.Error(fmt.Sprintf("Worker %d create file failed", nowId), "error", err)
-				return
-			}
-			for key, values := range kvs {
-				output := reducef(key, values)
-				// 将结果写入文件
-				if _, err := ofile.WriteString(fmt.Sprintf("%v %v\n", key, output)); err != nil {
-					slog.Error(fmt.Sprintf("Worker %d write file failed", nowId), "error", err)
+			if len(kvs) != 0  {
+				var key string
+				for k := range kvs {
+					key = k
+					break
+				}
+				fileName := fmt.Sprintf("mr-out-%d", ihash(key)%task.NReduce)
+				ofile, err := os.Create(fileName)
+				if err != nil {
+					slog.Error(fmt.Sprintf("Worker %d create file failed", nowId), "error", err)
 					return
 				}
-				// 追加模式写入文件
-				// ofile.WriteString(fmt.Sprintf("%v %v\n", key, output))
-				// fmt.Fprintf(ofile, "%v %v\n", key, output)
+				for key, values := range kvs {
+					output := reducef(key, values)
+					// 将结果写入文件
+					if _, err := ofile.WriteString(fmt.Sprintf("%v %v\n", key, output)); err != nil {
+						slog.Error(fmt.Sprintf("Worker %d write file failed", nowId), "error", err)
+						return
+					}
+					// 追加模式写入文件
+					// ofile.WriteString(fmt.Sprintf("%v %v\n", key, output))
+					// fmt.Fprintf(ofile, "%v %v\n", key, output)
+				}
+				ofile.Close()
 			}
-			ofile.Close()
 			// 干完活不知道休息一下吗
 			time.Sleep(time.Millisecond * 50)
 			// 通知任务完成
@@ -200,6 +203,7 @@ func callAssignTask(args *AssignTaskArgs, reply *AssignTaskReply) (Task, error) 
 }
 
 func callDoneTask(args *DoneTaskArgs, reply *DoneTaskReply) error {
+	slog.Info(fmt.Sprintf("Worker %d done task", args.Task.TaskId), "task", args.Task)
 	ok := call("Coordinator.DoneTask", args, reply)
 	if ok {
 		// fmt.Printf("done task %v\n", args.Task)

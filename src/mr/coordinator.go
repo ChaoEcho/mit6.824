@@ -295,7 +295,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// slog.SetDefault(logger)
 
 	slog.Info("Coordinator MakeCoordinator running", "files", files, "nReduce", nReduce)
-
+	//slog.Error("Coordinator MakeCoordinator running", "files", files, "nReduce", nReduce)
 	c := Coordinator{}
 	//fmt.Printf("files: %v, nReduce: %d\n", files, nReduce)
 	// 初始化任务列表
