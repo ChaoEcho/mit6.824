@@ -28,14 +28,25 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-	
-	time.Sleep(time.Microsecond*3)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
-	slog.SetDefault(logger)
-	
+	// time.Sleep(time.Microsecond * 3)
+	// timestamp := time.Now().Format("2024-01-01-12-00-00")
+	// // 打开或创建日志文件
+	// file, err := os.OpenFile("/home/echochao/go_project/mit6824/log/lab1/app-worker-"+timestamp+".log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+	// 	slog.Error("Failed to open log file", slog.Any("error", err))
+	// 	os.Exit(1) // 或者采取其他适当的错误处理措施
+	// }
+	// logger := slog.New(slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// 设置日志级别为error，INFO输出到文件中
+	// logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	// slog.SetDefault(logger)
+
 	// 根据时间戳生成id，只保留后面4位数字
 	nowId := time.Now().UnixNano() % 10000
+
+	slog.Info("Worker start running", "nowId", nowId)
 
 	// Your worker implementation here.
 
