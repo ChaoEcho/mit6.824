@@ -1,13 +1,17 @@
 package kvsrv
 
-import "6.5840/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
 
+	"6.5840/labrpc"
+	"github.com/google/uuid"
+)
 
 type Clerk struct {
 	server *labrpc.ClientEnd
 	// You will have to modify this struct.
+	taskIDMap map[string]bool
 }
 
 func nrand() int64 {
@@ -17,10 +21,19 @@ func nrand() int64 {
 	return x
 }
 
+func generateTaskId() string {
+	id, err := uuid.NewUUID()
+	if err != nil {
+		panic(err)
+	}
+	return id.String()
+}
+
 func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.server = server
 	// You'll have to add code here.
+	ck.taskIDMap = make(map[string]bool)
 	return ck
 }
 
@@ -35,9 +48,22 @@ func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-
-	// You will have to modify this function.
-	return ""
+	taskID := generateTaskId()
+	ck.taskIDMap[taskID] = false
+	args := GetArgs{
+		Key:    key,
+		TaskID: taskID,
+	}
+	reply := GetReply{}
+	ok := ck.server.Call("KVServer.Get", &args, &reply)
+	if !ok {
+		return ""
+	}
+	if reply.Status == ReplyStatusDuplicate {
+		return ""
+	}
+	ck.taskIDMap[taskID] = true
+	return reply.Value
 }
 
 // shared by Put and Append.
@@ -50,7 +76,23 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	// You will have to modify this function.
-	return ""
+	taskID := generateTaskId()
+	ck.taskIDMap[taskID] = false
+	args := PutAppendArgs{
+		Key:    key,
+		Value:  value,
+		TaskID: taskID,
+	}
+	reply := PutAppendReply{}
+	ok := ck.server.Call("KVServer."+op, &args, &reply)
+	if !ok {
+		return ""
+	}
+	if reply.Status == ReplyStatusDuplicate {
+		return ""
+	}
+	ck.taskIDMap[taskID] = true
+	return reply.Value
 }
 
 func (ck *Clerk) Put(key string, value string) {
