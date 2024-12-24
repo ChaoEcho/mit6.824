@@ -11,7 +11,6 @@ import (
 type Clerk struct {
 	server *labrpc.ClientEnd
 	// You will have to modify this struct.
-	taskIDMap map[string]bool
 }
 
 func nrand() int64 {
@@ -21,19 +20,15 @@ func nrand() int64 {
 	return x
 }
 
-func generateTaskId() string {
-	id, err := uuid.NewUUID()
-	if err != nil {
-		panic(err)
-	}
-	return id.String()
+func generateTaskId() int32 {
+	id := uuid.New()
+	return int32(id.ID())
 }
 
 func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.server = server
 	// You'll have to add code here.
-	ck.taskIDMap = make(map[string]bool)
 	return ck
 }
 
@@ -48,21 +43,12 @@ func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-	taskID := generateTaskId()
-	ck.taskIDMap[taskID] = false
 	args := GetArgs{
 		Key:    key,
-		TaskID: taskID,
 	}
 	reply := GetReply{}
-	ok := ck.server.Call("KVServer.Get", &args, &reply)
-	if !ok {
-		return ""
+	for !ck.server.Call("KVServer.Get", &args, &reply) {
 	}
-	if reply.Status == ReplyStatusDuplicate {
-		return ""
-	}
-	ck.taskIDMap[taskID] = true
 	return reply.Value
 }
 
@@ -77,21 +63,22 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	// You will have to modify this function.
 	taskID := generateTaskId()
-	ck.taskIDMap[taskID] = false
 	args := PutAppendArgs{
 		Key:    key,
 		Value:  value,
 		TaskID: taskID,
+		RequestType: RequestTypeHandler,
 	}
 	reply := PutAppendReply{}
-	ok := ck.server.Call("KVServer."+op, &args, &reply)
-	if !ok {
-		return ""
+
+	for !ck.server.Call("KVServer."+op, &args, &reply) {
+		DPrintf("Client PutAppend Request Failed TaskID: %d", taskID)
 	}
-	if reply.Status == ReplyStatusDuplicate {
-		return ""
+	args.RequestType = RequestTypeNotice
+	for !ck.server.Call("KVServer."+op, &args, &reply) {
+			DPrintf("Client PutAppend Notice Failed TaskID: %d", taskID)
 	}
-	ck.taskIDMap[taskID] = true
+	DPrintf("Client PutAppend Success Response TaskID: %d", taskID)
 	return reply.Value
 }
 

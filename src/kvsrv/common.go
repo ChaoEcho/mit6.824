@@ -8,30 +8,27 @@ type PutAppendArgs struct {
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
 	// 任务的唯一ID
-	TaskID string
+	TaskID int32
+	// 请求类型
+	RequestType RequestType
 }
 
 type PutAppendReply struct {
 	Value  string
-	Status ReplyStatus
 }
 
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
-	// 任务的唯一ID
-	TaskID string
 }
 
 type GetReply struct {
-	Value  string
-	Status ReplyStatus
+	Value string
 }
 
-type ReplyStatus int
+type RequestType int
 
 const (
-	ReplyStatusSuccess ReplyStatus = iota
-	ReplyStatusFailed
-	ReplyStatusDuplicate
+	RequestTypeHandler RequestType = iota
+	RequestTypeNotice
 )
