@@ -40,9 +40,9 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	_, ok := kv.completedTaskIDMap.Load(args.TaskID)
+	v, ok := kv.completedTaskIDMap.Load(args.TaskID)
 	if ok {
-		reply.Value = kv.storeKVMap[args.Key]
+		reply.Value = v.(string)
 		return
 	}
 	kv.mu.Lock()
@@ -50,8 +50,8 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.storeKVMap[args.Key] = args.Value
 	kv.mu.Unlock()
 
-	kv.completedTaskIDMap.Store(args.TaskID, true)
 	reply.Value = oldValue
+	kv.completedTaskIDMap.Store(args.TaskID, oldValue)
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
@@ -61,25 +61,25 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	_, ok := kv.completedTaskIDMap.Load(args.TaskID)
+	v, ok := kv.completedTaskIDMap.Load(args.TaskID)
 	if ok {
-		reply.Value = kv.storeKVMap[args.Key]
+		reply.Value = v.(string)
 		return
 	}
 	kv.mu.Lock()
 	oldValue := kv.storeKVMap[args.Key]
 	kv.storeKVMap[args.Key] = oldValue + args.Value
 	kv.mu.Unlock()
-	kv.completedTaskIDMap.Store(args.TaskID, true)
+
 	reply.Value = oldValue
+	kv.completedTaskIDMap.Store(args.TaskID, oldValue)
 }
 
 func StartKVServer() *KVServer {
 	kv := new(KVServer)
 
 	// You may need initialization code here.
-	kv.completedTaskIDMap = sync.Map{}
-	kv.storeKVMap = make(map[string]string)
+	kv.storeKVMap = make(map[string]string, 32)
 
 	return kv
 }
