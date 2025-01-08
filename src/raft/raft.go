@@ -75,8 +75,9 @@ type Raft struct {
 	matchIndex []int // 对于每一个服务器，已经复制给他的日志的最高索引
 
 	// 个人添加的属性
-	state             NodeState // 服务器的状态
-	lastHeartBeatTime time.Time // 上一次收到心跳的时间
+	state             NodeState     // 服务器的状态
+	lastHeartBeatTime time.Time     // 上一次收到心跳的时间
+	electionTimeout   time.Duration // 选举超时时间
 }
 
 // 定义节点的状态
@@ -180,6 +181,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	DPrintf("Server %d receive RequestVote from %d, args: %+v, self status: %+v\n", rf.me, args.CandidateId, args, rf)
 
+	// 不是跟随者，直接返回
+	if rf.state != Follower {
+		reply.VoteGranted = false
+		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+		return
+	}
+
 	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
 		reply.VoteGranted = false
 		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
@@ -190,6 +198,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.votedFor == -1 && rf.commitIndex <= args.LastLogIndex {
 		rf.mu.Lock()
 		rf.votedFor = args.CandidateId
+		rf.lastHeartBeatTime = time.Now()
 		// 变为跟随者
 		rf.state = Follower
 		rf.mu.Unlock()
@@ -234,6 +243,70 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// example AppendEntries RPC arguments structure.
+
+type AppendEntriesArgs struct {
+	Term         int        // 领导人的任期号
+	LeaderId     int        // 领导人的ID，以便于跟随者重定向请求
+	PrevLogIndex int        // 新的日志条目紧随之前的索引值
+	PrevLogTerm  int        // PrevLogIndex 条目的任期号
+	Entries      []LogEntry // 要保存的日志条目（被当做心跳使用时为空；为了提高效率可以一次性发送多个）
+	LeaderCommit int        // 领导人已经提交的日志的索引值
+}
+
+// example AppendEntries RPC reply structure.
+type AppendEntriesReply struct {
+	Term    int  // 当前任期号，用于领导人更新自己
+	Success bool // 如果跟随者包含了匹配上 PrevLogIndex 和 PrevLogTerm 的日志条目时为真
+}
+
+// example AppendEntries RPC handler.
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// Your code here (3A, 3B).
+
+	DPrintf("Server %d receive AppendEntries from %d, args: %+v, self status: %+v\n", rf.me, args.LeaderId, args, rf)
+
+	// 心跳时间需要更新
+	rf.lastHeartBeatTime = time.Now()
+
+	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
+		reply.Success = false
+		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+		return
+	}
+
+	if args.PrevLogIndex > len(rf.logs) {
+		reply.Success = false
+		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+		return
+	}
+
+	if args.PrevLogIndex > 0 && rf.logs[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+		reply.Success = false
+		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+		return
+	}
+
+	if args.PrevLogIndex > 0 && rf.logs[args.PrevLogIndex-1].Term != args.PrevLogTerm {
+		// 删除不匹配的日志条目和之后的所有日志条目
+		DPrintf("Server %d delete logs from %d\n", rf.me, args.PrevLogIndex)
+		rf.logs = rf.logs[:args.PrevLogIndex]
+	}
+
+	// TODO: 追加日志
+
+	// TODO: 更新 commitIndex
+
+	reply.Success = true
+	reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+}
+
+// example code to send a AppendEntries RPC to a server.
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -275,32 +348,45 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+// 选举超时时间(单位：毫秒)
+const Election_Timeout_MIN = 1000
+const Election_Timeout_MAX = 1500
+
+// 心跳时间（单位：毫秒）
+const HeartBeat_Time = 100
+
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
 		// Your code here (3A)
 		// Check if a leader election should be started.
 		if rf.state == Follower {
-			DPrintf("Follower %d\n", rf.me)
+			// DPrintf("Follower %d\n", rf.me)
 			// 如果在超过选举超时时间的情况下还没有收到来自领导人的心跳，或者候选人或者领导人的选举超时时间已经过
 			// 那么就会转变成候选人
 
 			// 选举超时时间
-			if time.Now().Sub(rf.lastHeartBeatTime) > 150*time.Millisecond {
+			if time.Now().Sub(rf.lastHeartBeatTime) > rf.electionTimeout {
 				DPrintf("Follower %d become Candidate\n", rf.me)
 				rf.mu.Lock()
 				rf.state = Candidate
+				// 任期加倍
+				// rf.currentTerm++
 				rf.mu.Unlock()
 			}
 
 		} else if rf.state == Candidate {
 			DPrintf("Candidate %d\n", rf.me)
+
+			rf.mu.Lock()
+			rf.currentTerm++
+			rf.mu.Unlock()
+
 			// 候选人会在超时时间内等待投票结果
 			// 如果在超时时间内没有收到大多数服务器的选票，那么就会再次发起选举
-			var voteCount int
+			voteCount := 1
 			for i := 0; i < len(rf.peers); i++ {
 				if i == rf.me {
-					voteCount++
 					continue
 				}
 				go func(i int) {
@@ -316,6 +402,11 @@ func (rf *Raft) ticker() {
 					DPrintf("Candidate %d send RequestVote to %d, reply: %+v\n", rf.me, i, reply)
 					if reply.VoteGranted {
 						voteCount++
+						if voteCount > len(rf.peers)/2 && rf.state == Candidate {
+							rf.mu.Lock()
+							rf.state = Leader
+							rf.mu.Unlock()
+						}
 					} else {
 						// TODO: 如果收到的任期号大于自己的任期号，那么就转变成跟随者
 						if reply.Term > int(atomic.LoadInt32(&rf.currentTerm)) {
@@ -324,8 +415,11 @@ func (rf *Raft) ticker() {
 							rf.mu.Unlock()
 						}
 					}
+					time.Sleep(time.Duration(HeartBeat_Time) * time.Millisecond)
 				}(i)
 			}
+
+			time.Sleep(time.Duration(rf.electionTimeout) * time.Millisecond)
 		} else if rf.state == Leader {
 			DPrintf("Leader %d\n", rf.me)
 			// 领导人会周期性的向其他服务器发送心跳
@@ -336,16 +430,27 @@ func (rf *Raft) ticker() {
 				go func(i int) {
 					// TODO: 3A先不发送心跳
 					// 心跳就暂时不打印了
-					heartBeatTime := 50 + (rand.Int63() % 150)
-					time.Sleep(time.Duration(heartBeatTime) * time.Millisecond)
+
+					args := &AppendEntriesArgs{
+						Term:         int(atomic.LoadInt32(&rf.currentTerm)),
+						LeaderId:     rf.me,
+						PrevLogIndex: 0,
+						PrevLogTerm:  0,
+						Entries:      make([]LogEntry, 0),
+						LeaderCommit: 0,
+					}
+					reply := &AppendEntriesReply{}
+					rf.sendAppendEntries(i, args, reply)
+
+					time.Sleep(time.Duration(HeartBeat_Time) * time.Millisecond)
 				}(i)
 			}
 		}
 
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		// ms := 50 + (rand.Int63() % 300)
+		// time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
 
@@ -378,6 +483,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.state = Follower
 	rf.lastHeartBeatTime = time.Now()
+	rf.electionTimeout = time.Duration(Election_Timeout_MIN+(rand.Int63()%(Election_Timeout_MAX-Election_Timeout_MIN))) * time.Millisecond
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
