@@ -177,6 +177,9 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
+
+	DPrintf("Server %d receive RequestVote from %d, args: %+v, self status: %+v\n", rf.me, args.CandidateId, args, rf)
+
 	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
 		reply.VoteGranted = false
 		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
@@ -187,6 +190,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.votedFor == -1 && rf.commitIndex <= args.LastLogIndex {
 		rf.mu.Lock()
 		rf.votedFor = args.CandidateId
+		// 变为跟随者
+		rf.state = Follower
 		rf.mu.Unlock()
 		reply.VoteGranted = true
 		reply.Term = args.Term
@@ -276,17 +281,20 @@ func (rf *Raft) ticker() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
 		if rf.state == Follower {
+			DPrintf("Follower %d\n", rf.me)
 			// 如果在超过选举超时时间的情况下还没有收到来自领导人的心跳，或者候选人或者领导人的选举超时时间已经过
 			// 那么就会转变成候选人
 
 			// 选举超时时间
 			if time.Now().Sub(rf.lastHeartBeatTime) > 150*time.Millisecond {
+				DPrintf("Follower %d become Candidate\n", rf.me)
 				rf.mu.Lock()
 				rf.state = Candidate
 				rf.mu.Unlock()
 			}
 
 		} else if rf.state == Candidate {
+			DPrintf("Candidate %d\n", rf.me)
 			// 候选人会在超时时间内等待投票结果
 			// 如果在超时时间内没有收到大多数服务器的选票，那么就会再次发起选举
 			var voteCount int
@@ -297,14 +305,15 @@ func (rf *Raft) ticker() {
 				}
 				go func(i int) {
 					args := &RequestVoteArgs{
-						Term:         int(atomic.LoadInt32(&rf.currentTerm)),
-						CandidateId:  rf.me,
+						Term:        int(atomic.LoadInt32(&rf.currentTerm)),
+						CandidateId: rf.me,
 						// TODO: 这里的索引和任期号需要根据实际情况来设置
 						LastLogIndex: 0,
 						LastLogTerm:  0,
 					}
 					reply := &RequestVoteReply{}
 					rf.sendRequestVote(i, args, reply)
+					DPrintf("Candidate %d send RequestVote to %d, reply: %+v\n", rf.me, i, reply)
 					if reply.VoteGranted {
 						voteCount++
 					} else {
@@ -318,6 +327,7 @@ func (rf *Raft) ticker() {
 				}(i)
 			}
 		} else if rf.state == Leader {
+			DPrintf("Leader %d\n", rf.me)
 			// 领导人会周期性的向其他服务器发送心跳
 			for i := 0; i < len(rf.peers); i++ {
 				if i == rf.me {
@@ -325,7 +335,7 @@ func (rf *Raft) ticker() {
 				}
 				go func(i int) {
 					// TODO: 3A先不发送心跳
-
+					// 心跳就暂时不打印了
 					heartBeatTime := 50 + (rand.Int63() % 150)
 					time.Sleep(time.Duration(heartBeatTime) * time.Millisecond)
 				}(i)
