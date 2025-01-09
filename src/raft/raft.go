@@ -264,10 +264,17 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (3A, 3B).
 
-	DPrintf("Server %d receive AppendEntries from %d, args: %+v, self status: %+v\n", rf.me, args.LeaderId, args, rf)
+	// DPrintf("Server %d receive AppendEntries from %d, args: %+v, self status: %+v\n", rf.me, args.LeaderId, args, rf)
 
 	// 心跳时间需要更新
-	rf.lastHeartBeatTime = time.Now()
+	rf.resetLastHearBeatTime()
+
+	if rf.state == Candidate && args.Term >= int(atomic.LoadInt32(&rf.currentTerm)) {
+		rf.mu.Lock()
+		rf.state = Follower
+		rf.votedFor = -1
+		rf.mu.Unlock()
+	}
 
 	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
 		reply.Success = false
@@ -275,25 +282,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	if args.PrevLogIndex > len(rf.logs) {
-		reply.Success = false
-		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
-		return
-	}
-
-	if args.PrevLogIndex > 0 && rf.logs[args.PrevLogIndex-1].Term != args.PrevLogTerm {
-		reply.Success = false
-		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
-		return
-	}
-
-	if args.PrevLogIndex > 0 && rf.logs[args.PrevLogIndex-1].Term != args.PrevLogTerm {
-		// 删除不匹配的日志条目和之后的所有日志条目
-		DPrintf("Server %d delete logs from %d\n", rf.me, args.PrevLogIndex)
-		rf.logs = rf.logs[:args.PrevLogIndex]
-	}
-
-	// TODO: 追加日志
+	// TODO: 日志暂时不处理
 
 	// TODO: 更新 commitIndex
 
@@ -348,6 +337,11 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+// 重置选举超时时间
+func (rf *Raft) resetLastHearBeatTime() {
+	rf.lastHeartBeatTime = time.Now()
+}
+
 // 选举超时时间(单位：毫秒)
 const Election_Timeout_MIN = 1000
 const Election_Timeout_MAX = 1500
@@ -356,94 +350,74 @@ const Election_Timeout_MAX = 1500
 const HeartBeat_Time = 100
 
 func (rf *Raft) ticker() {
+	// DPrintf("id %d, state %d, term %d, lastHeartBeatTime %v, electionTimeout %v\n", rf.me, rf.state, rf.currentTerm, rf.lastHeartBeatTime, rf.electionTimeout)
 	for rf.killed() == false {
 
 		// Your code here (3A)
 		// Check if a leader election should be started.
-		if rf.state == Follower {
-			// DPrintf("Follower %d\n", rf.me)
-			// 如果在超过选举超时时间的情况下还没有收到来自领导人的心跳，或者候选人或者领导人的选举超时时间已经过
-			// 那么就会转变成候选人
-
-			// 选举超时时间
-			if time.Now().Sub(rf.lastHeartBeatTime) > rf.electionTimeout {
-				DPrintf("Follower %d become Candidate\n", rf.me)
-				rf.mu.Lock()
-				rf.state = Candidate
-				// 任期加倍
-				// rf.currentTerm++
-				rf.mu.Unlock()
-			}
-
-		} else if rf.state == Candidate {
-			DPrintf("Candidate %d\n", rf.me)
-
-			rf.mu.Lock()
-			rf.currentTerm++
-			rf.mu.Unlock()
-
-			// 候选人会在超时时间内等待投票结果
-			// 如果在超时时间内没有收到大多数服务器的选票，那么就会再次发起选举
-			voteCount := 1
+		switch rf.state {
+		case Leader:
 			for i := 0; i < len(rf.peers); i++ {
 				if i == rf.me {
 					continue
 				}
-				go func(i int) {
-					args := &RequestVoteArgs{
-						Term:        int(atomic.LoadInt32(&rf.currentTerm)),
-						CandidateId: rf.me,
-						// TODO: 这里的索引和任期号需要根据实际情况来设置
-						LastLogIndex: 0,
-						LastLogTerm:  0,
-					}
-					reply := &RequestVoteReply{}
-					rf.sendRequestVote(i, args, reply)
-					DPrintf("Candidate %d send RequestVote to %d, reply: %+v\n", rf.me, i, reply)
-					if reply.VoteGranted {
-						voteCount++
-						if voteCount > len(rf.peers)/2 && rf.state == Candidate {
+
+				go func(server int) {
+					args := &AppendEntriesArgs{}
+					reply := &AppendEntriesReply{}
+					ok := rf.sendAppendEntries(server, args, reply)
+					if ok {
+						// 该领导者可能由于网络分区而无法与其他服务器通信，或者其他服务器可能已经宕机
+						if !reply.Success && reply.Term > int(atomic.LoadInt32(&rf.currentTerm)) {
 							rf.mu.Lock()
-							rf.state = Leader
+							rf.state = Follower
+							rf.votedFor = -1
 							rf.mu.Unlock()
 						}
 					} else {
-						// TODO: 如果收到的任期号大于自己的任期号，那么就转变成跟随者
-						if reply.Term > int(atomic.LoadInt32(&rf.currentTerm)) {
-							rf.mu.Lock()
-							rf.state = Follower
-							rf.mu.Unlock()
-						}
+						DPrintf("Server %d send AppendEntries to %d failed\n", rf.me, server)
 					}
-					time.Sleep(time.Duration(HeartBeat_Time) * time.Millisecond)
 				}(i)
 			}
-
-			time.Sleep(time.Duration(rf.electionTimeout) * time.Millisecond)
-		} else if rf.state == Leader {
-			DPrintf("Leader %d\n", rf.me)
-			// 领导人会周期性的向其他服务器发送心跳
+			time.Sleep(HeartBeat_Time * time.Millisecond)
+		case Candidate:
+			// 发送投票请求
+			voteNum := 1
 			for i := 0; i < len(rf.peers); i++ {
 				if i == rf.me {
 					continue
 				}
-				go func(i int) {
-					// TODO: 3A先不发送心跳
-					// 心跳就暂时不打印了
-
-					args := &AppendEntriesArgs{
+				go func(server int) {
+					args := &RequestVoteArgs{
 						Term:         int(atomic.LoadInt32(&rf.currentTerm)),
-						LeaderId:     rf.me,
-						PrevLogIndex: 0,
-						PrevLogTerm:  0,
-						Entries:      make([]LogEntry, 0),
-						LeaderCommit: 0,
+						CandidateId:  rf.me,
+						LastLogIndex: rf.commitIndex,
+						LastLogTerm:  0,
 					}
-					reply := &AppendEntriesReply{}
-					rf.sendAppendEntries(i, args, reply)
-
-					time.Sleep(time.Duration(HeartBeat_Time) * time.Millisecond)
+					reply := &RequestVoteReply{}
+					ok := rf.sendRequestVote(server, args, reply)
+					if ok {
+						if reply.VoteGranted {
+							voteNum++
+							if voteNum > len(rf.peers)/2 {
+								rf.mu.Lock()
+								rf.state = Leader
+								rf.currentTerm++
+								rf.mu.Unlock()
+							}
+						}
+					}
 				}(i)
+			}
+
+		case Follower:
+			// 如果超过了选举超时时间，就变成候选人
+			if time.Since(rf.lastHeartBeatTime) > rf.electionTimeout {
+				rf.mu.Lock()
+				rf.state = Candidate
+				rf.votedFor = rf.me
+				rf.currentTerm++
+				rf.mu.Unlock()
 			}
 		}
 
