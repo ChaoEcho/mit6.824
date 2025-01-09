@@ -102,8 +102,9 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (3A).
 
-	term = int(atomic.LoadInt32(&rf.currentTerm))
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = int(rf.currentTerm)
 	// TODO: 这里存疑，是否需要类似原子指令或者加锁呢？
 	isleader = rf.state == Leader
 
@@ -179,36 +180,44 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
 
-	DPrintf("Server %d receive RequestVote from %d, args: %+v, self status: %+v\n", rf.me, args.CandidateId, args, rf)
+	// 只有跟随者才能投票
+	// if rf.state != Follower {
+	// 	reply.VoteGranted = false
+	// 	reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
 
-	// 不是跟随者，直接返回
-	if rf.state != Follower {
-		reply.VoteGranted = false
-		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
-		return
-	}
+	// 	DPrintf("Node %d receive RequestVote from %d, but it is not a Follower\n", rf.me, args.CandidateId)
+
+	// 	return
+	// }
 
 	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
 		reply.VoteGranted = false
 		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+
+		DPrintf("Node %d receive RequestVote from %d, but the term is less than current term\n", rf.me, args.CandidateId)
+
 		return
 	}
 
 	// TODO: 感觉加锁时机也是很讲究的
 	if rf.votedFor == -1 && rf.commitIndex <= args.LastLogIndex {
 		rf.mu.Lock()
+		defer rf.mu.Unlock()
 		rf.votedFor = args.CandidateId
 		rf.lastHeartBeatTime = time.Now()
 		// 变为跟随者
 		rf.state = Follower
-		rf.mu.Unlock()
 		reply.VoteGranted = true
 		reply.Term = args.Term
+
+		DPrintf("Node %d receive RequestVote from %d, vote for it\n", rf.me, args.CandidateId)
+
 		return
 	}
 
+	DPrintf("Node %d receive RequestVote from %d, but it is not vote for it\n", rf.me, args.CandidateId)
 	reply.VoteGranted = false
-	reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+	reply.Term = int(rf.currentTerm)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -269,16 +278,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 心跳时间需要更新
 	rf.resetLastHearBeatTime()
 
+	// 如果当前节点是候选人，且任期号大于等于当前任期号，就变成跟随者
 	if rf.state == Candidate && args.Term >= int(atomic.LoadInt32(&rf.currentTerm)) {
 		rf.mu.Lock()
+		defer rf.mu.Unlock()
 		rf.state = Follower
 		rf.votedFor = -1
-		rf.mu.Unlock()
 	}
 
 	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
 		reply.Success = false
-		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+		reply.Term = int(rf.currentTerm)
 		return
 	}
 
@@ -286,8 +296,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// TODO: 更新 commitIndex
 
+	DPrintf("Server %d receive AppendEntries from %d\n", rf.me, args.LeaderId)
+
 	reply.Success = true
-	reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+	reply.Term = int(rf.currentTerm)
 }
 
 // example code to send a AppendEntries RPC to a server.
