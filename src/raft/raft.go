@@ -62,7 +62,7 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// 服务器的状态（持久化到磁盘）
-	currentTerm int32       // 服务器已知最新的任期（初始化为 0，持续递增）
+	currentTerm int         // 服务器已知最新的任期（初始化为 0，持续递增）
 	votedFor    int         // 在当前获得选票的候选人的ID
 	logs        []*LogEntry // 日志条目；每一个条目包含一个用户状态机执行的指令，以及领导人接收到该指令时的任期（第一个索引为 1）
 
@@ -75,9 +75,13 @@ type Raft struct {
 	matchIndex []int // 对于每一个服务器，已经复制给他的日志的最高索引
 
 	// 个人添加的属性
-	state             NodeState     // 服务器的状态
-	lastHeartBeatTime time.Time     // 上一次收到心跳的时间
-	electionTimeout   time.Duration // 选举超时时间
+	state             NodeState               // 服务器的状态
+	lastHeartBeatTime time.Time               // 上一次收到心跳的时间
+	electionTimeout   time.Duration           // 选举超时时间
+	voteCount         int                     // 获得选票的数量
+	appendEntriesChan chan AppendEntriesReply // 用于接收 AppendEntries 的通道
+	LeaderMsgChan     chan struct{}           // 用于接收 Leader 的通道
+	VoteMsgChan       chan struct{}           // 用于接收 Vote 的通道
 }
 
 // 定义节点的状态
@@ -176,48 +180,64 @@ type RequestVoteReply struct {
 	VoteGranted bool // 候选人赢得了此张选票时为真
 }
 
+func (rf *Raft) sendAllRequestVote() {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	args := &RequestVoteArgs{
+		Term:         int(rf.currentTerm),
+		CandidateId:  rf.me,
+		LastLogIndex: 0,
+		LastLogTerm:  0,
+	}
+
+	for i := range rf.peers {
+		if i != rf.me && rf.state == Candidate {
+			go func(server int) {
+				reply := &RequestVoteReply{
+					Term:        0,
+					VoteGranted: false,
+				}
+				rf.sendRequestVote(server, args, reply)
+			}(i)
+		}
+	}
+
+}
+
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
 
-	// 只有跟随者才能投票
-	// if rf.state != Follower {
-	// 	reply.VoteGranted = false
-	// 	reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	// 	DPrintf("Node %d receive RequestVote from %d, but it is not a Follower\n", rf.me, args.CandidateId)
+	reply.Term = rf.currentTerm
 
-	// 	return
-	// }
+	if args.Term > rf.currentTerm {
+		rf.ConvertToFollower(args.Term)
+		rf.VoteMsgChan <- struct{}{}
+	}
 
-	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
-		reply.VoteGranted = false
-		reply.Term = int(atomic.LoadInt32(&rf.currentTerm))
-
-		DPrintf("Node %d receive RequestVote from %d, but the term is less than current term\n", rf.me, args.CandidateId)
-
+	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateId) {
+		reply.Term, reply.VoteGranted = rf.currentTerm, false
 		return
 	}
 
-	// TODO: 感觉加锁时机也是很讲究的
-	if rf.votedFor == -1 && rf.commitIndex <= args.LastLogIndex {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
+	if rf.state == Follower && (rf.votedFor == -1 || rf.votedFor == args.CandidateId) {
 		rf.votedFor = args.CandidateId
-		rf.lastHeartBeatTime = time.Now()
-		// 变为跟随者
-		rf.state = Follower
-		reply.VoteGranted = true
-		reply.Term = args.Term
-
-		DPrintf("Node %d receive RequestVote from %d, vote for it\n", rf.me, args.CandidateId)
-
-		return
+		reply.Term, reply.VoteGranted = args.Term, true
+		rf.VoteMsgChan <- struct{}{}
 	}
+}
 
-	DPrintf("Node %d receive RequestVote from %d, but it is not vote for it\n", rf.me, args.CandidateId)
-	reply.VoteGranted = false
-	reply.Term = int(rf.currentTerm)
+// TODO: 存疑，没看到具体实现，后面有待修改
+func (rf *Raft) ConvertToFollower(term int) {
+	rf.state = Follower
+	rf.currentTerm = term
+	rf.votedFor = -1
+	rf.resetLastHearBeatTime()
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -249,7 +269,39 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
+	if !ok {
+		DPrintf("Server %d send RequestVote to %d failed\n", rf.me, server)
+		return false
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.state != Candidate || args.Term != rf.currentTerm {
+		return true
+	}
+
+	if reply.Term > rf.currentTerm {
+		rf.ConvertToFollower(reply.Term)
+		rf.VoteMsgChan <- struct{}{}
+		return true
+	}
+
+	if reply.VoteGranted && rf.state == Candidate {
+		rf.voteCount++
+		if 2*rf.voteCount > len(rf.peers) && rf.state == Candidate {
+			// TODO:成为领导者，还需要其他操作
+			rf.ConvertToLeader()
+			rf.LeaderMsgChan <- struct{}{}
+		}
+	}
+
+	return true
+}
+
+func (rf *Raft) ConvertToLeader() {
+	rf.state = Leader
+	rf.currentTerm++
 }
 
 // example AppendEntries RPC arguments structure.
@@ -269,42 +321,62 @@ type AppendEntriesReply struct {
 	Success bool // 如果跟随者包含了匹配上 PrevLogIndex 和 PrevLogTerm 的日志条目时为真
 }
 
+func (rf *Raft) SendAllAppendEntries() {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	for server := range rf.peers {
+		if server != rf.me && rf.state == Leader {
+			go func(server int) {
+				args := &AppendEntriesArgs{
+					Term:         int(rf.currentTerm),
+					LeaderId:     rf.me,
+					PrevLogIndex: 0,
+					PrevLogTerm:  0,
+					Entries:      nil,
+					LeaderCommit: 0,
+				}
+				reply := &AppendEntriesReply{
+					Term:    0,
+					Success: false,
+				}
+				rf.sendAppendEntries(server, args, reply)
+			}(server)
+		}
+	}
+}
+
 // example AppendEntries RPC handler.
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// Your code here (3A, 3B).
 
 	// DPrintf("Server %d receive AppendEntries from %d, args: %+v, self status: %+v\n", rf.me, args.LeaderId, args, rf)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	reply.Term = rf.currentTerm
 
-	// 心跳时间需要更新
-	rf.resetLastHearBeatTime()
-
-	// 如果当前节点是候选人，且任期号大于等于当前任期号，就变成跟随者
-	if rf.state == Candidate && args.Term >= int(atomic.LoadInt32(&rf.currentTerm)) {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		rf.state = Follower
-		rf.votedFor = -1
-	}
-
-	if args.Term < int(atomic.LoadInt32(&rf.currentTerm)) {
-		reply.Success = false
-		reply.Term = int(rf.currentTerm)
+	if rf.currentTerm < args.Term {
+		rf.ConvertToFollower(args.Term)
 		return
 	}
 
-	// TODO: 日志暂时不处理
-
-	// TODO: 更新 commitIndex
-
-	DPrintf("Server %d receive AppendEntries from %d\n", rf.me, args.LeaderId)
-
-	reply.Success = true
-	reply.Term = int(rf.currentTerm)
+	rf.appendEntriesChan <- AppendEntriesReply{Term: rf.currentTerm, Success: true}
 }
 
 // example code to send a AppendEntries RPC to a server.
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+
+	if rf.state != Leader {
+		return false
+	}
+
+	if reply.Term > rf.currentTerm {
+		rf.ConvertToFollower(reply.Term)
+		return false
+	}
+
 	return ok
 }
 
@@ -368,68 +440,43 @@ func (rf *Raft) ticker() {
 		// Your code here (3A)
 		// Check if a leader election should be started.
 		switch rf.state {
-		case Leader:
-			for i := 0; i < len(rf.peers); i++ {
-				if i == rf.me {
-					continue
-				}
-
-				go func(server int) {
-					args := &AppendEntriesArgs{}
-					reply := &AppendEntriesReply{}
-					ok := rf.sendAppendEntries(server, args, reply)
-					if ok {
-						// 该领导者可能由于网络分区而无法与其他服务器通信，或者其他服务器可能已经宕机
-						if !reply.Success && reply.Term > int(atomic.LoadInt32(&rf.currentTerm)) {
-							rf.mu.Lock()
-							rf.state = Follower
-							rf.votedFor = -1
-							rf.mu.Unlock()
-						}
-					} else {
-						DPrintf("Server %d send AppendEntries to %d failed\n", rf.me, server)
-					}
-				}(i)
-			}
-			time.Sleep(HeartBeat_Time * time.Millisecond)
 		case Candidate:
-			// 发送投票请求
-			voteNum := 1
-			for i := 0; i < len(rf.peers); i++ {
-				if i == rf.me {
+			go rf.sendAllRequestVote()
+			select {
+			case <-rf.VoteMsgChan:
+				continue
+			case resp := <-rf.appendEntriesChan:
+				if resp.Term >= rf.currentTerm {
+					rf.ConvertToFollower(resp.Term)
 					continue
 				}
-				go func(server int) {
-					args := &RequestVoteArgs{
-						Term:         int(atomic.LoadInt32(&rf.currentTerm)),
-						CandidateId:  rf.me,
-						LastLogIndex: rf.commitIndex,
-						LastLogTerm:  0,
-					}
-					reply := &RequestVoteReply{}
-					ok := rf.sendRequestVote(server, args, reply)
-					if ok {
-						if reply.VoteGranted {
-							voteNum++
-							if voteNum > len(rf.peers)/2 {
-								rf.mu.Lock()
-								rf.state = Leader
-								rf.currentTerm++
-								rf.mu.Unlock()
-							}
-						}
-					}
-				}(i)
+			case <-time.After(rf.electionTimeout):
+				rf.ConvertToCandidate()
+				continue
+			case <-rf.LeaderMsgChan:
 			}
-
+		case Leader:
+			rf.SendAllAppendEntries()
+			select {
+			case resp := <-rf.appendEntriesChan:
+				if resp.Term > rf.currentTerm {
+					rf.ConvertToFollower(resp.Term)
+					continue
+				}
+			case <-time.After(HeartBeat_Time * time.Millisecond):
+				continue
+			}
 		case Follower:
-			// 如果超过了选举超时时间，就变成候选人
-			if time.Since(rf.lastHeartBeatTime) > rf.electionTimeout {
-				rf.mu.Lock()
-				rf.state = Candidate
-				rf.votedFor = rf.me
-				rf.currentTerm++
-				rf.mu.Unlock()
+			select {
+			case <-rf.VoteMsgChan:
+				continue
+			case resp := <-rf.appendEntriesChan:
+				if resp.Term > rf.currentTerm {
+					rf.ConvertToFollower(resp.Term)
+					continue
+				}
+			case <-time.After(rf.electionTimeout):
+				rf.ConvertToCandidate()
 			}
 		}
 
@@ -438,6 +485,13 @@ func (rf *Raft) ticker() {
 		// ms := 50 + (rand.Int63() % 300)
 		// time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
+}
+
+func (rf *Raft) ConvertToCandidate() {
+	rf.state = Candidate
+	rf.currentTerm++
+	rf.votedFor = rf.me
+	rf.voteCount = 1
 }
 
 // the service or tester wants to create a Raft server. the ports
