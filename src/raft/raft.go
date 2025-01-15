@@ -304,6 +304,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	if rf.state == Candidate {
+		rf.state = Follower
+	}
+
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
@@ -399,7 +403,7 @@ func (rf *Raft) killed() bool {
 const (
 	heartbeatInterval  = 150
 	electionTimeoutMin = 500
-	electionTimeoutMax = 1000
+	electionTimeoutMax = 1500
 )
 
 func (rf *Raft) ticker() {
@@ -427,7 +431,9 @@ func (rf *Raft) ticker() {
 				if rf.voteCount > len(rf.peers)/2 {
 					rf.mu.Lock()
 					rf.state = Leader
+					rf.currentTerm++
 					rf.mu.Unlock()
+					DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
 				}
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
@@ -438,7 +444,7 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 			}
 		case Leader:
-			DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
+			// DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
 			rf.sendAppendEntriesToAll()
 			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
 		}
