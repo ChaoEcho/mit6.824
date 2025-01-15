@@ -86,7 +86,7 @@ type Raft struct {
 	// 节点状态
 	state NodeState
 	// 选举超时时间
-	electionTimeout time.Duration
+	electionTimeout int
 	// 投票chan
 	voteChan chan interface{}
 	// 心跳chan
@@ -100,12 +100,12 @@ type LogEntry struct {
 	Command interface{}
 }
 
-type NodeState int
+type NodeState string
 
 const (
-	Follower NodeState = iota
-	Candidate
-	Leader
+	Follower  NodeState = "Follower"
+	Candidate NodeState = "Candidate"
+	Leader    NodeState = "Leader"
 )
 
 // return currentTerm and whether this server
@@ -251,6 +251,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if ok {
 		if reply.VoteGranted {
+			DPrintf("I am %d, I got a vote from %d", rf.me, server)
 			rf.mu.Lock()
 			// 获得投票
 			rf.voteChan <- interface{}(true)
@@ -406,13 +407,14 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		// Your code here (3A)
 		// Check if a leader election should be started.
+		DPrintf("I am %d, I am a %v", rf.me, rf.state)
 		switch rf.state {
 		case Follower:
 			// 我是Follower，超时我就投票
 			select {
 			case <-rf.appendChan:
 				// 接收到心跳了
-			case <-time.After(rf.electionTimeout):
+			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				// 选举超时，准备变身
 				rf.mu.Lock()
 				rf.state = Candidate
@@ -422,13 +424,15 @@ func (rf *Raft) ticker() {
 				rf.voteCount = 1
 				rf.mu.Unlock()
 			}
+			DPrintf("I am %d, I am a %v,my term is %d", rf.me, rf.state, rf.currentTerm)
 		case Candidate:
 			// 我是Candidate，开始选举
 			go rf.sendRequestVoteToAll()
 			select {
 			case <-rf.voteChan:
 				// 获得投票
-			case <-time.After(rf.electionTimeout):
+				
+			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				// 选举超时，重新选举
 				rf.mu.Lock()
 				rf.state = Candidate
@@ -473,10 +477,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.state = Follower
-	rf.electionTimeout = time.Duration(electionTimeoutMin+rand.Intn(electionTimeoutMax-electionTimeoutMin)) * time.Millisecond
+	rf.electionTimeout = electionTimeoutMin + rand.Intn(electionTimeoutMax-electionTimeoutMin)
 	rf.voteChan = make(chan interface{})
+	rf.appendChan = make(chan interface{})
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	DPrintf("I am %d, I am a %v,my term is %d,my election timeout is %d", rf.me, rf.state, rf.currentTerm, rf.electionTimeout)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
