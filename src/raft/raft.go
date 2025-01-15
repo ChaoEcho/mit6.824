@@ -263,15 +263,41 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	// TODO: 需要加锁
+
+	// TODO: 具体追加日志逻辑有点商榷
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// TODO: 具体追加日志逻辑有点商榷
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
+		return
+	}
+
+	//TODO: 日志处理逻辑暂时不实现
+
+	reply.Term = rf.currentTerm
+	reply.Success = true
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if ok {
+		if reply.Success {
+			// rf.mu.Lock()
+			// TODO：3A不需要修改
+			// rf.mu.Unlock()
+		} else {
+			rf.mu.Lock()
+			// 如果返回的任期大于当前任期，则更新当前任期，并转换为跟随者
+			if reply.Term > rf.currentTerm {
+				rf.currentTerm = reply.Term
+				rf.state = Follower
+				rf.votedFor = -1
+			}
+			rf.mu.Unlock()
+		}
+	}
 	return ok
 }
 
@@ -334,6 +360,12 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+const (
+	heartbeatInterval  = 150
+	electionTimeoutMin = 500
+	electionTimeoutMax = 1000
+)
+
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 
@@ -345,7 +377,9 @@ func (rf *Raft) ticker() {
 		case Candidate:
 
 		case Leader:
-
+			// 我是Leader，当镇压世间一切敌（遮天乱入）
+			rf.sendAppendEntriesToAll()
+			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
 		}
 
 		// pause for a random amount of time between 50 and 350
