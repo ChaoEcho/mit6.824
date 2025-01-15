@@ -83,7 +83,16 @@ type Raft struct {
 	matchIndex []int
 
 	// 个人添加属性
+	// 节点状态
 	state NodeState
+	// 选举超时时间
+	electionTimeout time.Duration
+	// 投票chan
+	voteChan chan interface{}
+	// 心跳chan
+	appendChan chan interface{}
+	// 票数
+	voteCount int
 }
 
 type LogEntry struct {
@@ -190,7 +199,25 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	// 接收到心跳了
+	rf.appendChan <- interface{}(true)
 	// TODO: 具体投票逻辑有点商榷
+
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		return
+	}
+
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
+		reply.Term = rf.currentTerm
+		return
+	}
+
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -222,6 +249,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	if ok {
+		if reply.VoteGranted {
+			rf.mu.Lock()
+			// 获得投票
+			rf.voteChan <- interface{}(true)
+			rf.voteCount++
+			rf.mu.Unlock()
+		}
+	}
 	return ok
 }
 
@@ -368,24 +404,45 @@ const (
 
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
 		// Your code here (3A)
 		// Check if a leader election should be started.
 		switch rf.state {
 		case Follower:
-
+			// 我是Follower，超时我就投票
+			select {
+			case <-rf.appendChan:
+				// 接收到心跳了
+			case <-time.After(rf.electionTimeout):
+				// 选举超时，准备变身
+				rf.mu.Lock()
+				rf.state = Candidate
+				rf.currentTerm++
+				rf.votedFor = rf.me
+				rf.voteChan <- interface{}(true)
+				rf.voteCount = 1
+				rf.mu.Unlock()
+			}
 		case Candidate:
-
+			// 我是Candidate，开始选举
+			go rf.sendRequestVoteToAll()
+			select {
+			case <-rf.voteChan:
+				// 获得投票
+			case <-time.After(rf.electionTimeout):
+				// 选举超时，重新选举
+				rf.mu.Lock()
+				rf.state = Candidate
+				rf.currentTerm++
+				rf.votedFor = rf.me
+				rf.voteChan <- interface{}(true)
+				rf.voteCount = 1
+				rf.mu.Unlock()
+			}
 		case Leader:
 			// 我是Leader，当镇压世间一切敌（遮天乱入）
 			rf.sendAppendEntriesToAll()
 			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
 		}
-
-		// pause for a random amount of time between 50 and 350
-		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
 
@@ -416,7 +473,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.state = Follower
-
+	rf.electionTimeout = time.Duration(electionTimeoutMin+rand.Intn(electionTimeoutMax-electionTimeoutMin)) * time.Millisecond
+	rf.voteChan = make(chan interface{})
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
