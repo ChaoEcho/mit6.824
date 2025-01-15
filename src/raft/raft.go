@@ -406,19 +406,21 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		switch rf.state {
 		case Follower:
+			DPrintf("I am %d,I am a follower,my term is %d", rf.me, rf.currentTerm)
 			select {
 			case <-rf.appendChan:
-				// 接收到心跳了
+				//DPrintf("I am %d,I receive a heartbeat,I am a follower", rf.me)
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
+				DPrintf("I am %d,I don't know who is leader,I will be a candidate", rf.me)
 				rf.mu.Lock()
 				rf.state = Candidate
 				rf.currentTerm++
 				rf.votedFor = rf.me
-				rf.voteChan <- interface{}(true)
 				rf.voteCount = 1
 				rf.mu.Unlock()
 			}
 		case Candidate:
+			DPrintf("I am %d,I am a candidate,my term is %d", rf.me, rf.currentTerm)
 			go rf.sendRequestVoteToAll()
 			select {
 			case <-rf.voteChan:
@@ -432,11 +434,11 @@ func (rf *Raft) ticker() {
 				rf.state = Candidate
 				rf.currentTerm++
 				rf.votedFor = rf.me
-				rf.voteChan <- interface{}(true)
 				rf.voteCount = 1
 				rf.mu.Unlock()
 			}
 		case Leader:
+			DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
 			rf.sendAppendEntriesToAll()
 			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
 		}
