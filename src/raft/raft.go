@@ -194,14 +194,13 @@ type RequestVoteReply struct {
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (3A, 3B).
-	// TODO: 需要加锁
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// 接收到心跳了
-	rf.appendChan <- interface{}(true)
-	// TODO: 具体投票逻辑有点商榷
+	// 确保只有在需要时才发送信号
+	if args.Term >= rf.currentTerm {
+		rf.appendChan <- interface{}(true)
+	}
 
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
@@ -405,17 +404,12 @@ const (
 
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-		// Your code here (3A)
-		// Check if a leader election should be started.
-		DPrintf("I am %d, I am a %v", rf.me, rf.state)
 		switch rf.state {
 		case Follower:
-			// 我是Follower，超时我就投票
 			select {
 			case <-rf.appendChan:
 				// 接收到心跳了
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
-				// 选举超时，准备变身
 				rf.mu.Lock()
 				rf.state = Candidate
 				rf.currentTerm++
@@ -424,16 +418,16 @@ func (rf *Raft) ticker() {
 				rf.voteCount = 1
 				rf.mu.Unlock()
 			}
-			DPrintf("I am %d, I am a %v,my term is %d", rf.me, rf.state, rf.currentTerm)
 		case Candidate:
-			// 我是Candidate，开始选举
 			go rf.sendRequestVoteToAll()
 			select {
 			case <-rf.voteChan:
-				// 获得投票
-				
+				if rf.voteCount > len(rf.peers)/2 {
+					rf.mu.Lock()
+					rf.state = Leader
+					rf.mu.Unlock()
+				}
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
-				// 选举超时，重新选举
 				rf.mu.Lock()
 				rf.state = Candidate
 				rf.currentTerm++
@@ -443,7 +437,6 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 			}
 		case Leader:
-			// 我是Leader，当镇压世间一切敌（遮天乱入）
 			rf.sendAppendEntriesToAll()
 			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
 		}
