@@ -19,6 +19,7 @@ package raft
 
 import (
 	//	"bytes"
+
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -164,10 +165,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (3A, 3B).
-	Term         int
-	CandidateId  int
+	// 候选者的任期
+	Term int
+	// 候选者的ID
+	CandidateId int
+	// 候选者的最后日志索引
 	LastLogIndex int
-	LastLogTerm  int
+	// 候选者的最后日志任期
+	LastLogTerm int
 }
 
 // example RequestVote RPC reply structure.
@@ -220,13 +225,35 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+func (rf *Raft) sendRequestVoteToAll() {
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		args := &RequestVoteArgs{
+			Term:        rf.currentTerm,
+			CandidateId: rf.me,
+			// TODO: 这里需要修改，lab 3A不包含任何日志
+			LastLogIndex: 0,
+			LastLogTerm:  0,
+		}
+		reply := &RequestVoteReply{}
+		go rf.sendRequestVote(i, args, reply)
+	}
+}
 
 type AppendEntriesArgs struct {
-	Term         int
-	LeaderId     int
+	// 领导者的任期
+	Term int
+	// 领导者的ID
+	LeaderId int
+	// 领导者的最后日志索引
 	PrevLogIndex int
-	PrevLogTerm  int
-	Entries      []LogEntry
+	// 领导者的最后日志任期
+	PrevLogTerm int
+	// 领导者的日志
+	Entries []LogEntry
+	// 领导者的已提交的日志索引
 	LeaderCommit int
 }
 
@@ -246,6 +273,24 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
+}
+
+func (rf *Raft) sendAppendEntriesToAll() {
+	for i := range rf.peers {
+		if i == rf.me {
+			continue
+		}
+		args := &AppendEntriesArgs{
+			Term:     rf.currentTerm,
+			LeaderId: rf.me,
+			// TODO: 这里需要修改，lab 3A不包含任何日志
+			PrevLogIndex: 0,
+			PrevLogTerm:  0,
+			LeaderCommit: 0,
+		}
+		reply := &AppendEntriesReply{}
+		go rf.sendAppendEntries(i, args, reply)
+	}
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -296,11 +341,11 @@ func (rf *Raft) ticker() {
 		// Check if a leader election should be started.
 		switch rf.state {
 		case Follower:
-			
+
 		case Candidate:
-			
+
 		case Leader:
-			
+
 		}
 
 		// pause for a random amount of time between 50 and 350
