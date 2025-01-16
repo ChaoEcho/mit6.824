@@ -305,7 +305,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 
 	if rf.state == Candidate {
-		rf.state = Follower
+		// DPrintf("I am %d,I am a candidate,I am a follower now", rf.me)
+		rf.becomeFollower()
 	}
 
 	if args.Term < rf.currentTerm {
@@ -332,8 +333,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			// 如果返回的任期大于当前任期，则更新当前任期，并转换为跟随者
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
-				rf.state = Follower
-				rf.votedFor = -1
+				rf.becomeFollower()
+				rf.votedFor = args.LeaderId
 			}
 			rf.mu.Unlock()
 		}
@@ -410,45 +411,51 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		switch rf.state {
 		case Follower:
-			DPrintf("I am %d,I am a follower,my term is %d", rf.me, rf.currentTerm)
 			select {
 			case <-rf.appendChan:
-				//DPrintf("I am %d,I receive a heartbeat,I am a follower", rf.me)
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
-				DPrintf("I am %d,I don't know who is leader,I will be a candidate", rf.me)
 				rf.mu.Lock()
-				rf.state = Candidate
-				rf.currentTerm++
-				rf.votedFor = rf.me
-				rf.voteCount = 1
+				rf.becomeCandidate()
 				rf.mu.Unlock()
 			}
 		case Candidate:
-			DPrintf("I am %d,I am a candidate,my term is %d", rf.me, rf.currentTerm)
 			go rf.sendRequestVoteToAll()
 			select {
 			case <-rf.voteChan:
 				if rf.voteCount > len(rf.peers)/2 {
 					rf.mu.Lock()
-					rf.state = Leader
-					rf.currentTerm++
+					rf.becomeLeader()
 					rf.mu.Unlock()
-					DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
 				}
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
-				rf.state = Candidate
-				rf.currentTerm++
-				rf.votedFor = rf.me
-				rf.voteCount = 1
+				rf.becomeCandidate()
 				rf.mu.Unlock()
 			}
 		case Leader:
-			// DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
 			rf.sendAppendEntriesToAll()
 			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
 		}
 	}
+}
+
+func (rf *Raft) becomeLeader() {
+	rf.state = Leader
+	rf.currentTerm++
+	DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
+}
+
+func (rf *Raft) becomeCandidate() {
+	rf.state = Candidate
+	rf.currentTerm++
+	rf.votedFor = rf.me
+	rf.voteCount = 1
+	DPrintf("I am %d,I am a candidate,my term is %d", rf.me, rf.currentTerm)
+}
+
+func (rf *Raft) becomeFollower() {
+	rf.state = Follower
+	DPrintf("I am %d,I am a follower,my term is %d", rf.me, rf.currentTerm)
 }
 
 // the service or tester wants to create a Raft server. the ports
