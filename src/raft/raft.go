@@ -264,6 +264,11 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) sendRequestVoteToAll() {
+	rf.mu.Lock()
+	rf.votedFor = rf.me
+	rf.voteCount = 1
+	rf.mu.Unlock()
+
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
@@ -407,9 +412,9 @@ func (rf *Raft) killed() bool {
 }
 
 const (
-	heartbeatInterval  = 200
+	heartbeatInterval  = 150
 	electionTimeoutMin = 1000
-	electionTimeoutMax = 2000
+	electionTimeoutMax = 1500
 )
 
 func (rf *Raft) ticker() {
@@ -454,8 +459,8 @@ func (rf *Raft) becomeLeader() {
 func (rf *Raft) becomeCandidate() {
 	rf.state = Candidate
 	rf.currentTerm++
-	rf.votedFor = rf.me
-	rf.voteCount = 1
+	//rf.votedFor = rf.me
+	//rf.voteCount = 1
 	DPrintf("I am %d,I am a candidate,my term is %d", rf.me, rf.currentTerm)
 }
 
@@ -491,7 +496,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.state = Follower
-	rf.electionTimeout = electionTimeoutMin + rand.Intn(electionTimeoutMax-electionTimeoutMin)
+	rf.electionTimeout = electionTimeoutMin + rand.Intn(electionTimeoutMax-electionTimeoutMin) + rand.Intn(5)*heartbeatInterval
 	rf.voteChan = make(chan interface{})
 	rf.appendChan = make(chan interface{})
 	// initialize from state persisted before a crash
