@@ -412,8 +412,8 @@ func (rf *Raft) killed() bool {
 }
 
 const (
-	heartbeatInterval  = 150
-	electionTimeoutMin = 1000
+	heartbeatInterval  = 100
+	electionTimeoutMin = 300
 	electionTimeoutMax = 1500
 )
 
@@ -430,6 +430,7 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 			}
 		case Candidate:
+			DPrintf("I am %d,I am a candidate,my term is %d,my election timeout is %d", rf.me, rf.currentTerm, rf.electionTimeout)
 			go rf.sendRequestVoteToAll()
 			select {
 			case <-rf.voteChan:
@@ -459,6 +460,10 @@ func (rf *Raft) becomeLeader() {
 func (rf *Raft) becomeCandidate() {
 	rf.state = Candidate
 	rf.currentTerm++
+	rf.votedFor = -1
+	rf.voteCount = 0
+	rf.electionTimeout = electionTimeoutMin + int(rand.Int63()%300)
+	//DPrintf("I am %d,I am a candidate,my term is %d,my election timeout is %d", rf.me, rf.currentTerm, rf.electionTimeout)
 	//rf.votedFor = rf.me
 	//rf.voteCount = 1
 	DPrintf("I am %d,I am a candidate,my term is %d", rf.me, rf.currentTerm)
@@ -496,7 +501,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	rf.state = Follower
-	rf.electionTimeout = electionTimeoutMin + rand.Intn(electionTimeoutMax-electionTimeoutMin) + rand.Intn(5)*heartbeatInterval
+	rf.electionTimeout = electionTimeoutMin + int(rand.Int63()%300)
 	rf.voteChan = make(chan interface{})
 	rf.appendChan = make(chan interface{})
 	// initialize from state persisted before a crash
