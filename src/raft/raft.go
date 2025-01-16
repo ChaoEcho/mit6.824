@@ -198,9 +198,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 
 	// 确保只有在需要时才发送信号
-	if args.Term >= rf.currentTerm {
-		rf.appendChan <- interface{}(true)
-	}
+	// if args.Term >= rf.currentTerm {
+	// 	rf.appendChan <- interface{}(true)
+	// }
 
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
@@ -315,6 +315,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	rf.appendChan <- interface{}(true)
+
 	//TODO: 日志处理逻辑暂时不实现
 
 	reply.Term = rf.currentTerm
@@ -402,9 +404,9 @@ func (rf *Raft) killed() bool {
 }
 
 const (
-	heartbeatInterval  = 150
-	electionTimeoutMin = 500
-	electionTimeoutMax = 1500
+	heartbeatInterval  = 200
+	electionTimeoutMin = 1000
+	electionTimeoutMax = 2000
 )
 
 func (rf *Raft) ticker() {
@@ -413,6 +415,7 @@ func (rf *Raft) ticker() {
 		case Follower:
 			select {
 			case <-rf.appendChan:
+				DPrintf("I am %d,I am a follower,I receive a heartbeat", rf.me)
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
 				rf.becomeCandidate()
@@ -477,7 +480,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (3A, 3B, 3C).
 
 	// 初始化
-	rf.currentTerm = 0
+	rf.currentTerm = 1
 	rf.votedFor = -1
 	rf.logs = []LogEntry{}
 	rf.commitIndex = 0
