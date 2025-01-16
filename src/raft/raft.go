@@ -253,8 +253,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 			DPrintf("I am %d, I got a vote from %d", rf.me, server)
 			rf.mu.Lock()
 			// 获得投票
-			rf.voteChan <- interface{}(true)
-			rf.voteCount++
+			if rf.state == Candidate {
+				rf.voteChan <- interface{}(true)
+				rf.voteCount++
+			}
 			rf.mu.Unlock()
 		}
 	}
@@ -316,6 +318,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	rf.appendChan <- interface{}(true)
+	rf.currentTerm = args.Term
 
 	//TODO: 日志处理逻辑暂时不实现
 
@@ -415,7 +418,7 @@ func (rf *Raft) ticker() {
 		case Follower:
 			select {
 			case <-rf.appendChan:
-				DPrintf("I am %d,I am a follower,I receive a heartbeat", rf.me)
+				//DPrintf("I am %d,I am a follower,I receive a heartbeat", rf.me)
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
 				rf.becomeCandidate()
