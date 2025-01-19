@@ -91,6 +91,8 @@ type Raft struct {
 	voteChan chan interface{}
 	// 心跳chan
 	appendChan chan interface{}
+	// 成为leader的chan
+	becomeLeaderChan chan interface{}
 	// 票数
 	voteCount int
 }
@@ -194,8 +196,11 @@ type RequestVoteReply struct {
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "RequestVote", Term: rf.currentTerm, Message: "start"})
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "RequestVote", Term: rf.currentTerm, Message: "lock"})
 
 	// 确保只有在需要时才发送信号
 	// if args.Term >= rf.currentTerm {
@@ -206,6 +211,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
+	}
+
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		// rf.becomeFollower()
+		rf.state = Follower
+		rf.votedFor = -1
 	}
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
@@ -254,8 +266,18 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 			rf.mu.Lock()
 			// 获得投票
 			if rf.state == Candidate {
-				rf.voteChan <- interface{}(true)
+				// rf.voteChan <- interface{}(true)
 				rf.voteCount++
+				if rf.state == Candidate && 2*rf.voteCount > len(rf.peers) {
+					rf.becomeLeaderChan <- interface{}(true)
+				}
+			}
+			rf.mu.Unlock()
+		} else {
+			rf.mu.Lock()
+			if rf.state == Candidate && reply.Term > rf.currentTerm {
+				rf.currentTerm = reply.Term
+				rf.becomeFollower()
 			}
 			rf.mu.Unlock()
 		}
@@ -264,11 +286,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 func (rf *Raft) sendRequestVoteToAll() {
-	rf.mu.Lock()
-	rf.votedFor = rf.me
-	rf.voteCount = 1
-	rf.mu.Unlock()
-
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "sendRequestVoteToAll", Term: rf.currentTerm, Message: ""})
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
@@ -421,6 +439,7 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		switch rf.state {
 		case Follower:
+			// DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "Ticker Follower", Term: rf.currentTerm, Message: ""})
 			select {
 			case <-rf.appendChan:
 				//DPrintf("I am %d,I am a follower,I receive a heartbeat", rf.me)
@@ -430,48 +449,66 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 			}
 		case Candidate:
-			DPrintf("I am %d,I am a candidate,my term is %d,my election timeout is %d", rf.me, rf.currentTerm, rf.electionTimeout)
+			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "Ticker Candidate", Term: rf.currentTerm, Message: ""})
 			go rf.sendRequestVoteToAll()
 			select {
-			case <-rf.voteChan:
-				if rf.voteCount > len(rf.peers)/2 {
-					rf.mu.Lock()
-					rf.becomeLeader()
-					rf.mu.Unlock()
-				}
+			case <-rf.becomeLeaderChan:
+				rf.mu.Lock()
+				rf.becomeLeader()
+				rf.mu.Unlock()
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
+				time.Sleep(time.Duration(rf.electionTimeout) * time.Millisecond)
 				rf.becomeCandidate()
 				rf.mu.Unlock()
 			}
 		case Leader:
+			// DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "Ticker Leader", Term: rf.currentTerm, Message: ""})
 			rf.sendAppendEntriesToAll()
 			time.Sleep(time.Duration(heartbeatInterval) * time.Millisecond)
 		}
 	}
 }
 
+type MyDPrintLog struct {
+	Id      int
+	State   NodeState
+	Action  string
+	Term    int
+	Message string
+}
+
 func (rf *Raft) becomeLeader() {
 	rf.state = Leader
 	rf.currentTerm++
-	DPrintf("I am %d,I am a leader,my term is %d", rf.me, rf.currentTerm)
+	DPrintf("I am %d,I become a leader,my term is %d", rf.me, rf.currentTerm)
 }
 
 func (rf *Raft) becomeCandidate() {
 	rf.state = Candidate
 	rf.currentTerm++
-	rf.votedFor = -1
-	rf.voteCount = 0
+	rf.votedFor = rf.me
+	rf.voteCount = 1
 	rf.electionTimeout = electionTimeoutMin + int(rand.Int63()%300)
-	//DPrintf("I am %d,I am a candidate,my term is %d,my election timeout is %d", rf.me, rf.currentTerm, rf.electionTimeout)
-	//rf.votedFor = rf.me
-	//rf.voteCount = 1
-	DPrintf("I am %d,I am a candidate,my term is %d", rf.me, rf.currentTerm)
+	DPrintf("I am %d,I become a candidate,my term is %d", rf.me, rf.currentTerm)
+}
+
+func GetCurrentTime(precision string) string {
+	now := time.Now()
+
+	switch precision {
+	case "micro":
+		return now.Format("2006-01-02 15:04:05.000000")
+	case "nano":
+		return now.Format("2006-01-02 15:04:05.000000000")
+	default:
+		return now.Format("2006-01-02 15:04:05") // 默认秒精度
+	}
 }
 
 func (rf *Raft) becomeFollower() {
 	rf.state = Follower
-	DPrintf("I am %d,I am a follower,my term is %d", rf.me, rf.currentTerm)
+	DPrintf("I am %d,I become a follower,my term is %d", rf.me, rf.currentTerm)
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -504,6 +541,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.electionTimeout = electionTimeoutMin + int(rand.Int63()%300)
 	rf.voteChan = make(chan interface{})
 	rf.appendChan = make(chan interface{})
+	rf.becomeLeaderChan = make(chan interface{})
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
