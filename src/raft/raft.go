@@ -340,15 +340,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	if rf.state == Follower {
-		rf.appendChan <- interface{}(true)
-	}
+	// if rf.state == Follower {
+	// 	rf.appendChan <- interface{}(true)
+	// }
 
 	if args.Term > rf.currentTerm {
 		rf.becomeFollower()
 	}
 
-	rf.currentTerm = args.Term
+	//rf.currentTerm = args.Term
 
 	//TODO: 日志处理逻辑暂时不实现
 
@@ -448,8 +448,8 @@ func (rf *Raft) ticker() {
 		case Follower:
 			// DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "Ticker Follower", Term: rf.currentTerm, Message: ""})
 			select {
-			case <-rf.appendChan:
-				//DPrintf("I am %d,I am a follower,I receive a heartbeat", rf.me)
+			// case <-rf.appendChan:
+			// 	DPrintf("I am %d,I am a follower,I receive a heartbeat", rf.me)
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
 				rf.becomeCandidate()
