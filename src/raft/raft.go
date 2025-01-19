@@ -208,7 +208,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// 	rf.appendChan <- interface{}(true)
 	// }
 
-	if args.Term < rf.currentTerm {
+	if rf.state == Leader || args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
@@ -334,21 +334,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	originState := rf.state
+
+	if rf.state == Candidate || args.Term > rf.currentTerm {
+		rf.becomeFollower()
+		rf.currentTerm = args.Term
+	}
+
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
 
-	// if rf.state == Follower {
-	// 	rf.appendChan <- interface{}(true)
-	// }
-
-	if args.Term > rf.currentTerm {
-		rf.becomeFollower()
+	if originState == Follower {
+		rf.appendChan <- interface{}(true)
 	}
-
-	//rf.currentTerm = args.Term
 
 	//TODO: 日志处理逻辑暂时不实现
 
@@ -437,8 +438,8 @@ func (rf *Raft) killed() bool {
 }
 
 const (
-	heartbeatInterval  = 100
-	electionTimeoutMin = 300
+	heartbeatInterval  = 150
+	electionTimeoutMin = 500
 	electionTimeoutMax = 1500
 )
 
@@ -448,7 +449,7 @@ func (rf *Raft) ticker() {
 		case Follower:
 			// DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "Ticker Follower", Term: rf.currentTerm, Message: ""})
 			select {
-			// case <-rf.appendChan:
+			case <-rf.appendChan:
 			// 	DPrintf("I am %d,I am a follower,I receive a heartbeat", rf.me)
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
@@ -491,36 +492,23 @@ type MyDPrintLog struct {
 }
 
 func (rf *Raft) becomeLeader() {
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeLeader", Term: rf.currentTerm})
 	rf.state = Leader
 	rf.currentTerm++
-	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeLeader", Term: rf.currentTerm})
 }
 
 func (rf *Raft) becomeCandidate() {
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeCandidate", Term: rf.currentTerm})
 	rf.state = Candidate
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.voteCount = 1
 	rf.electionTimeout = electionTimeoutMin + int(rand.Int63()%300)
-	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeCandidate", Term: rf.currentTerm})
-}
-
-func GetCurrentTime(precision string) string {
-	now := time.Now()
-
-	switch precision {
-	case "micro":
-		return now.Format("2006-01-02 15:04:05.000000")
-	case "nano":
-		return now.Format("2006-01-02 15:04:05.000000000")
-	default:
-		return now.Format("2006-01-02 15:04:05") // 默认秒精度
-	}
 }
 
 func (rf *Raft) becomeFollower() {
-	rf.state = Follower
 	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeFollower", Term: rf.currentTerm})
+	rf.state = Follower
 }
 
 // the service or tester wants to create a Raft server. the ports
