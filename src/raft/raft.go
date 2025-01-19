@@ -205,9 +205,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > rf.currentTerm && rf.state != Follower {
 		rf.becomeFollower()
 		rf.currentTerm = args.Term
-		reply.Term = rf.currentTerm
-		reply.VoteGranted = false
-		return
 	}
 
 	if args.Term < rf.currentTerm {
@@ -228,6 +225,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	originState := rf.state
+	originTerm := rf.currentTerm
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if ok {
 		if reply.VoteGranted {
@@ -247,12 +246,13 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 				rf.currentTerm = reply.Term
 				rf.becomeFollower()
 			}
-			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "sendRequestVote", Term: rf.currentTerm, Message: "I can not get a vote from " + strconv.Itoa(server)})
+			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: originState,
+				Action: "sendRequestVote", Term: originTerm, Message: "I can not get a vote from " + strconv.Itoa(server)})
 			rf.mu.Unlock()
 		}
 	} else {
-		DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state,
-			Action: "sendRequestVote", Term: rf.currentTerm, Message: "I can not connect to " + strconv.Itoa(server)})
+		DPrintf("%+v", MyDPrintLog{Id: rf.me, State: originState,
+			Action: "sendRequestVote", Term: originTerm, Message: "I can not connect to " + strconv.Itoa(server)})
 	}
 	return ok
 }
@@ -314,7 +314,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	if originState == Follower {
+	if originState == Follower && rf.state == Follower {
 		rf.appendChan <- interface{}(true)
 	}
 
@@ -337,7 +337,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.becomeFollower()
-				rf.votedFor = args.LeaderId
+				//rf.votedFor = args.LeaderId
 			}
 			rf.mu.Unlock()
 		}
@@ -363,18 +363,6 @@ func (rf *Raft) sendAppendEntriesToAll() {
 	}
 }
 
-// the service using Raft (e.g. a k/v server) wants to start
-// agreement on the next command to be appended to Raft's log. if this
-// server isn't the leader, returns false. otherwise start the
-// agreement and return immediately. there is no guarantee that this
-// command will ever be committed to the Raft log, since the leader
-// may fail or lose an election. even if the Raft instance has been killed,
-// this function should return gracefully.
-//
-// the first return value is the index that the command will appear at
-// if it's ever committed. the second return value is the current
-// term. the third return value is true if this server believes it is
-// the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
@@ -385,15 +373,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	return index, term, isLeader
 }
 
-// the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
-// check whether Kill() has been called. the use of atomic avoids the
-// need for a lock.
-//
-// the issue is that long-running goroutines use memory and may chew
-// up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
-// should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
