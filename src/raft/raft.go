@@ -197,28 +197,23 @@ type RequestVoteReply struct {
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "RequestVote", Term: rf.currentTerm, Message: "start"})
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	//DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "RequestVote", Term: rf.currentTerm, Message: "lock"})
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "RequestVote", Term: rf.currentTerm, Message: "start"})
 
-	// 确保只有在需要时才发送信号
-	// if args.Term >= rf.currentTerm {
-	// 	rf.appendChan <- interface{}(true)
-	// }
-
-	if rf.state == Leader || args.Term < rf.currentTerm {
+	if args.Term > rf.currentTerm && rf.state != Follower {
+		rf.becomeFollower()
+		rf.currentTerm = args.Term
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = false
 		return
 	}
 
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.becomeFollower()
-		// rf.state = Follower
-		rf.votedFor = -1
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		return
 	}
 
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
@@ -232,33 +227,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.VoteGranted = false
 }
 
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if ok {
@@ -267,7 +235,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "sendRequestVote", Term: rf.currentTerm, Message: "I got a vote from " + strconv.Itoa(server)})
 			// 获得投票
 			if rf.state == Candidate {
-				// rf.voteChan <- interface{}(true)
 				rf.voteCount++
 				if rf.state == Candidate && 2*rf.voteCount > len(rf.peers) {
 					rf.becomeLeaderChan <- interface{}(true)
@@ -509,6 +476,9 @@ func (rf *Raft) becomeCandidate() {
 func (rf *Raft) becomeFollower() {
 	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeFollower", Term: rf.currentTerm})
 	rf.state = Follower
+	rf.votedFor = -1
+	rf.voteCount = 0
+	rf.electionTimeout = electionTimeoutMin + int(rand.Int63()%300)
 }
 
 // the service or tester wants to create a Raft server. the ports
