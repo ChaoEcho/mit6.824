@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 
 	"math/rand"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -200,7 +201,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "RequestVote", Term: rf.currentTerm, Message: "lock"})
+	//DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "RequestVote", Term: rf.currentTerm, Message: "lock"})
 
 	// 确保只有在需要时才发送信号
 	// if args.Term >= rf.currentTerm {
@@ -215,8 +216,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
-		// rf.becomeFollower()
-		rf.state = Follower
+		rf.becomeFollower()
+		// rf.state = Follower
 		rf.votedFor = -1
 	}
 
@@ -262,8 +263,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	if ok {
 		if reply.VoteGranted {
-			DPrintf("I am %d, I got a vote from %d", rf.me, server)
 			rf.mu.Lock()
+			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "sendRequestVote", Term: rf.currentTerm, Message: "I got a vote from " + strconv.Itoa(server)})
 			// 获得投票
 			if rf.state == Candidate {
 				// rf.voteChan <- interface{}(true)
@@ -275,12 +276,16 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 			rf.mu.Unlock()
 		} else {
 			rf.mu.Lock()
-			if rf.state == Candidate && reply.Term > rf.currentTerm {
+			if reply.Term > rf.currentTerm {
 				rf.currentTerm = reply.Term
 				rf.becomeFollower()
 			}
+			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "sendRequestVote", Term: rf.currentTerm, Message: "I can not get a vote from " + strconv.Itoa(server)})
 			rf.mu.Unlock()
 		}
+	} else {
+		DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state,
+			Action: "sendRequestVote", Term: rf.currentTerm, Message: "I can not connect to " + strconv.Itoa(server)})
 	}
 	return ok
 }
@@ -329,18 +334,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if rf.state == Candidate {
-		// DPrintf("I am %d,I am a candidate,I am a follower now", rf.me)
-		rf.becomeFollower()
-	}
-
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
 		return
 	}
 
-	rf.appendChan <- interface{}(true)
+	if rf.state == Follower {
+		rf.appendChan <- interface{}(true)
+	}
+
+	if args.Term > rf.currentTerm {
+		rf.becomeFollower()
+	}
+
 	rf.currentTerm = args.Term
 
 	//TODO: 日志处理逻辑暂时不实现
@@ -449,7 +456,11 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 			}
 		case Candidate:
-			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "Ticker Candidate", Term: rf.currentTerm, Message: ""})
+			DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state,
+				Action:  "Ticker Candidate",
+				Term:    rf.currentTerm,
+				Message: "",
+				Extra:   map[string]interface{}{"electionTimeout": rf.electionTimeout}})
 			go rf.sendRequestVoteToAll()
 			select {
 			case <-rf.becomeLeaderChan:
@@ -458,7 +469,7 @@ func (rf *Raft) ticker() {
 				rf.mu.Unlock()
 			case <-time.After(time.Duration(rf.electionTimeout) * time.Millisecond):
 				rf.mu.Lock()
-				time.Sleep(time.Duration(rf.electionTimeout) * time.Millisecond)
+				// time.Sleep(time.Duration(rf.electionTimeout) * time.Millisecond)
 				rf.becomeCandidate()
 				rf.mu.Unlock()
 			}
@@ -476,12 +487,13 @@ type MyDPrintLog struct {
 	Action  string
 	Term    int
 	Message string
+	Extra   interface{}
 }
 
 func (rf *Raft) becomeLeader() {
 	rf.state = Leader
 	rf.currentTerm++
-	DPrintf("I am %d,I become a leader,my term is %d", rf.me, rf.currentTerm)
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeLeader", Term: rf.currentTerm})
 }
 
 func (rf *Raft) becomeCandidate() {
@@ -490,7 +502,7 @@ func (rf *Raft) becomeCandidate() {
 	rf.votedFor = rf.me
 	rf.voteCount = 1
 	rf.electionTimeout = electionTimeoutMin + int(rand.Int63()%300)
-	DPrintf("I am %d,I become a candidate,my term is %d", rf.me, rf.currentTerm)
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeCandidate", Term: rf.currentTerm})
 }
 
 func GetCurrentTime(precision string) string {
@@ -508,7 +520,7 @@ func GetCurrentTime(precision string) string {
 
 func (rf *Raft) becomeFollower() {
 	rf.state = Follower
-	DPrintf("I am %d,I become a follower,my term is %d", rf.me, rf.currentTerm)
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "becomeFollower", Term: rf.currentTerm})
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -545,7 +557,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	DPrintf("I am %d, I am a %v,my term is %d,my election timeout is %d", rf.me, rf.state, rf.currentTerm, rf.electionTimeout)
+	DPrintf("%+v", MyDPrintLog{Id: rf.me, State: rf.state, Action: "Make", Term: rf.currentTerm, Message: "", Extra: map[string]interface{}{"electionTimeout": rf.electionTimeout}})
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
